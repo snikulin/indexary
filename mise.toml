@@ -29,8 +29,13 @@ fi
 pnpm run dev -- --knowledge-base "$1" --profile personal --port 4174
 '''
 
+[tasks."smoke:kb"]
+description = "Run the privacy-safe manual personal Knowledge Base smoke"
+depends = ["_install"]
+run = "node scripts/verify-personal-read-only.mjs"
+
 [tasks.test]
-description = "Run unit and integration tests"
+description = "Run focused and assembled Fastify integration tests"
 depends = ["_install"]
 run = "node scripts/verify-fixture-read-only.mjs -- pnpm run test:workspace"
 

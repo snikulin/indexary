@@ -33,11 +33,19 @@ The stable project interface is:
 - `mise run test`: run the test suites;
 - `mise run build`: create an optimized application build;
 - `mise run check`: run the complete local quality gate;
-- `mise run perf:index`: verify the generated v1 indexing and search support target.
+- `mise run perf:index`: verify the generated v1 indexing and search support target;
+- `mise run smoke:kb`, with an existing non-empty `INDEXARY_KB_PATH`: run the
+  content-safe manual personal Knowledge Base smoke with a byte-for-byte
+  boundary check.
 
 Package-level scripts and granular checks are workspace implementation details, not a second public task interface.
 
-`mise run check` comprises formatting verification, linting, type checking, unit tests, server integration tests against fixtures, an optimized application build, and a short browser smoke test. Personal Knowledge Bases, extended browser suites, and performance benchmarks are outside this quality gate.
+`mise run check` comprises formatting verification, linting, type checking,
+focused server and web tests, assembled Fastify integration tests against real
+temporary files and SQLite FTS5, an optimized application build, and the short
+Playwright smoke. The named package scripts make every part visible in the gate
+output. Personal Knowledge Bases, Firefox confirmation, and performance
+benchmarks are deliberately outside this non-personal quality gate.
 
 ## Development data
 
@@ -48,6 +56,13 @@ Personal Knowledge Base contents must not be copied into the repository, build a
 Tests verify that Indexary leaves the fixture Knowledge Base byte-for-byte unchanged. The v1 write boundary is enforced by application interfaces and tests rather than an operating-system filesystem sandbox.
 
 Fixture development and development against a personal Knowledge Base may run simultaneously. They use different ports and cache namespaces so their derived indexes cannot collide.
+
+The fixture instance uses port `4173` and profile `fixture`, ordinary personal
+development uses port `4174` and profile `personal`, and the manual personal
+smoke uses port `4175` and profile `personal-smoke`. The cache identity also
+includes a non-reversible Knowledge Base identifier, so concurrent instances do
+not share a catalog even when profiles are accidentally reused across different
+roots.
 
 The derived catalog and full-text search database is stored under
 `$XDG_CACHE_HOME/indexary/catalog-v4/<profile>/<knowledge-base-id>` (or the
@@ -73,12 +88,19 @@ silently ineffective measurement fails the benchmark. The benchmark is
 intentionally outside the routine quality gate.
 
 The recorded 2026-09-11 run on the supported Linux x86-64 environment (Node
-24.21.0, Intel Core i9-13900H) completed cold indexing in 6.95 seconds and warm
-reconciliation in 550.94 milliseconds, with a 14.63 millisecond slowest
-representative search and 157.65 millisecond maximum observed event-loop delay.
-The calibration observed 90.57 milliseconds of a deliberate 100-millisecond
-stall. Those measurements keep index work in-process behind the Knowledge Base
-module boundary.
+24.21.0, Intel Core i9-13900H) completed cold indexing in 6.16 seconds and warm
+reconciliation in 584.90 milliseconds, with a 15.61 millisecond slowest
+representative search and 157.63 millisecond maximum observed event-loop delay.
+The calibration observed 90.48 milliseconds of a deliberate 100-millisecond
+stall. Interruption evidence preserved the preceding catalog, removed one
+abandoned candidate, recovered all 2,001 generated Documents, and left the
+generated Knowledge Base unchanged. Those measurements keep index work
+in-process behind the Knowledge Base module boundary.
+
+The complete checkout evidence and the personal confirmation procedure are in
+[daily-use-checkout.md](daily-use-checkout.md). No personal path, Document name,
+content, metadata value, material, browser trace, screenshot, or visited URL is
+recorded by that procedure.
 
 ## Change flow
 

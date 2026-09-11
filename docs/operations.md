@@ -27,11 +27,26 @@ while usable Documents remain available.
 
 Operational logs may identify a problematic document by its path relative to the Knowledge Base and may describe the error type. They do not include document contents, frontmatter values, or the absolute Knowledge Base root by default.
 
-## Initial operating mode
+## Daily-use checkout operating mode
 
-Initial development does not maintain a separate production installation. `mise run dev` runs against fixtures, while `mise run dev:kb -- <path>` explicitly starts the working instance against a personal Knowledge Base from the current checkout.
+The first delivery gate is a feature-complete daily-use application run from the
+checkout. `mise run dev` uses the fixture, while
+`mise run dev:kb -- <path>` explicitly starts the working instance against a
+personal Knowledge Base. They use separate ports and cache profiles and can run
+concurrently.
 
-There is no systemd unit, versioned release directory, deployment task, automatic activation, or rollback mechanism in this phase. A developer returns to an earlier working state through normal git history.
+Before the production checkpoint, the owner performs the explicit
+`mise run smoke:kb` checklist with an existing non-empty `INDEXARY_KB_PATH`, as
+documented in [daily-use-checkout.md](daily-use-checkout.md). The wrapper records
+no personal identifiers and compares the complete selected tree before and
+after the manual session. The operator must restore the bytes of the deliberately
+external test edit before ending the session.
+
+Production remains a separate, pending milestone. There is no systemd unit,
+versioned release directory, deployment task, automatic activation, Tailscale
+Serve configuration, or rollback mechanism yet. A developer returns to an
+earlier working state through normal git history. The checkout gate must not be
+described or operated as an always-on installation.
 
 Reconsider a separate installed instance and deployment process when any of the following occurs:
 

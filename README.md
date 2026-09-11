@@ -2,11 +2,10 @@
 
 **An open-source, local-first web interface for exploring filesystem-based knowledge bases.**
 
-> Project status: the production-shaped Atlas opens the Home Document and browses the
-> complete nested Document catalog, follows deterministic wikilinks and backlinks, and
-> previews referenced Source Materials and Attachments and searches Documents through
-> React, Fastify, and a rebuildable SQLite FTS5 cache; the rest of the v1 behaviors are
-> under active implementation.
+> Project status: the complete read-only Atlas is verified for daily use from this
+> checkout against the synthetic Knowledge Base. The separate personal production
+> milestone—immutable releases, systemd operation, Tailscale activation, and tested
+> rollback—is still pending.
 
 ## Overview
 
@@ -69,9 +68,7 @@ Architectural principles:
 - Node.js
 - TypeScript
 - Fastify
-- Zod or TypeBox for request and response validation
-
-The validation library will be selected during implementation.
+- TypeBox for request and response validation
 
 ## Access model
 
@@ -113,10 +110,17 @@ Install the pinned toolchain with `mise install`, then use the public task inter
 - `mise run dev:kb -- <path>` starts against one explicitly selected personal Knowledge Base;
 - `mise run test` runs unit and assembled-server integration tests;
 - `mise run build` creates the optimized same-origin application;
-- `mise run check` runs formatting, linting, types, tests, build, and browser smoke.
+- `mise run check` runs formatting, linting, types, focused tests, assembled Fastify
+  integration tests, the optimized build, and the short browser smoke;
+- `mise run perf:index` checks the generated 10,000-Document support target;
+- `mise run smoke:kb`, with an existing non-empty `INDEXARY_KB_PATH`, starts
+  the privacy-safe manual personal smoke and verifies that the selected
+  Knowledge Base has the same bytes after the session.
 
 Dependency installation is frozen by the lockfile, and every public task that can touch the
 synthetic Knowledge Base verifies that its tree remains byte-for-byte unchanged.
+The [daily-use checkout evidence](docs/daily-use-checkout.md) records the
+reproducible gate and the content-safe manual personal checklist.
 
 ## License
 

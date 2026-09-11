@@ -9,6 +9,8 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "vitest run",
+    "test:focused": "vitest run test/config.test.ts test/document.test.ts test/links.test.ts",
+    "test:integration": "vitest run test/application.test.ts test/knowledge-base.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
