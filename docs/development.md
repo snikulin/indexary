@@ -28,7 +28,8 @@ The stable project interface is:
 - `mise run dev:kb -- <path>`: explicitly run against a personal Knowledge Base;
 - `mise run test`: run the test suites;
 - `mise run build`: create an optimized application build;
-- `mise run check`: run the complete local quality gate.
+- `mise run check`: run the complete local quality gate;
+- `mise run perf:index`: verify the generated v1 indexing and search support target.
 
 Package-level scripts and granular checks are workspace implementation details, not a second public task interface.
 
@@ -53,21 +54,27 @@ Knowledge Base path is stored inside the Knowledge Base or routine health
 output. `INDEXARY_CACHE_ROOT` or `--cache-root` may select an alternate cache
 root for isolated tests and diagnostics.
 
-Compatible indexes are opened and reconciled against the filesystem before the
-instance becomes ready. Invalid indexes and reconciliation results are built as
-separate candidates, validated, and atomically selected. A first build remains
-live but not ready, and readiness reports only an aggregate degraded count.
+Compatible indexes are opened and reconciled against a metadata fingerprint of
+the current filesystem before the instance becomes ready. An unchanged warm
+index is reused without reparsing Documents; changed, invalid, and corrupt
+indexes are built as separate candidates, validated, and atomically selected. A
+first build remains live but not ready, and readiness reports only an aggregate
+degraded count.
 
 `mise run perf:index` generates a non-personal workload of 10,000 Documents and
 10,000,000,000 bytes of sparse Source Material, then checks the 30-second cold
 index, 200-millisecond representative search, event-loop delay, and read-only
-targets. It is intentionally outside the routine quality gate.
+targets. A known synchronous stall first calibrates the event-loop monitor so a
+silently ineffective measurement fails the benchmark. The benchmark is
+intentionally outside the routine quality gate.
 
 The recorded 2026-09-11 run on the supported Linux x86-64 environment (Node
-24.21.0, Intel Core i9-13900H) completed cold indexing in 6.81 seconds, with a
-17.35 millisecond slowest representative search and 59.38 millisecond maximum
-observed event-loop delay. Those measurements keep index work in-process behind
-the Knowledge Base module boundary.
+24.21.0, Intel Core i9-13900H) completed cold indexing in 6.95 seconds and warm
+reconciliation in 550.94 milliseconds, with a 14.63 millisecond slowest
+representative search and 157.65 millisecond maximum observed event-loop delay.
+The calibration observed 90.57 milliseconds of a deliberate 100-millisecond
+stall. Those measurements keep index work in-process behind the Knowledge Base
+module boundary.
 
 ## Change flow
 

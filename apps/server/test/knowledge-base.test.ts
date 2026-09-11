@@ -1,10 +1,12 @@
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -33,6 +35,28 @@ async function createTestKnowledgeBase(root: string, profile: string) {
   const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
   temporaryDirectories.push(cacheRoot);
   return createKnowledgeBase(root, { cacheRoot, profile });
+}
+
+async function findCatalogFile(cacheRoot: string): Promise<string> {
+  const catalogRelative = (await readdir(cacheRoot, { recursive: true }))
+    .map(String)
+    .find((entry) => entry.endsWith("catalog.sqlite"));
+  expect(catalogRelative).toBeDefined();
+  return path.join(cacheRoot, catalogRelative!);
+}
+
+async function waitForCandidate(cacheRoot: string): Promise<string> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const candidate = (await readdir(cacheRoot, { recursive: true }))
+      .map(String)
+      .find((entry) => path.basename(entry).startsWith(".catalog-candidate-"));
+    if (candidate !== undefined) {
+      return path.join(cacheRoot, candidate);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error("Timed out waiting for an index candidate.");
 }
 
 afterEach(async () => {
@@ -235,7 +259,8 @@ describe("Knowledge Base", () => {
     expect(personalCatalog).toBeDefined();
     expect(fixtureCatalog).not.toBe(personalCatalog);
     expect(fixtureCatalog).toContain(`catalog-v4${path.sep}fixture`);
-    const database = new DatabaseSync(path.join(cacheRoot, fixtureCatalog!), {
+    const catalogFile = path.join(cacheRoot, fixtureCatalog!);
+    const database = new DatabaseSync(catalogFile, {
       readOnly: true,
     });
     expect(database.prepare("PRAGMA user_version").get()).toEqual({
@@ -268,6 +293,7 @@ describe("Knowledge Base", () => {
     });
     expect(JSON.stringify(identity)).not.toContain(root);
     database.close();
+    const compatibleCatalogBefore = await stat(catalogFile);
     const initialRevision = (await fixtureProfile.openHomeDocument())?.revision;
     await Promise.all([fixtureProfile.close(), personalProfile.close()]);
 
@@ -277,6 +303,11 @@ describe("Knowledge Base", () => {
     });
     await reused.initialize();
     expect((await reused.openHomeDocument())?.revision).toBe(initialRevision);
+    const compatibleCatalogAfter = await stat(catalogFile);
+    expect(compatibleCatalogAfter.ino).toBe(compatibleCatalogBefore.ino);
+    expect(compatibleCatalogAfter.mtimeMs).toBe(
+      compatibleCatalogBefore.mtimeMs,
+    );
     await reused.close();
 
     await writeFile(path.join(root, "Новый.md"), "# Новый\n");
@@ -305,11 +336,7 @@ describe("Knowledge Base", () => {
     const first = createKnowledgeBase(root, { cacheRoot, profile: "recovery" });
     await first.initialize();
     await first.close();
-    const catalogRelative = (await readdir(cacheRoot, { recursive: true }))
-      .map(String)
-      .find((entry) => entry.endsWith("catalog.sqlite"));
-    expect(catalogRelative).toBeDefined();
-    const catalogFile = path.join(cacheRoot, catalogRelative!);
+    const catalogFile = await findCatalogFile(cacheRoot);
 
     await writeFile(catalogFile, "not a sqlite database");
     const corruptRecovery = createKnowledgeBase(root, {
@@ -340,6 +367,83 @@ describe("Knowledge Base", () => {
     expect(await captureTree(root)).toEqual(before);
   });
 
+  test("rebuilds caches missing any required schema object", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-schema-"));
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
+    temporaryDirectories.push(root, cacheRoot);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+
+    const first = createKnowledgeBase(root, { cacheRoot, profile: "schema" });
+    await first.initialize();
+    await first.close();
+    const catalogFile = await findCatalogFile(cacheRoot);
+    const requiredSchemaObjects = [
+      { type: "TABLE", name: "folders" },
+      { type: "TABLE", name: "documents" },
+      { type: "TABLE", name: "materials" },
+      { type: "TABLE", name: "document_tags" },
+      { type: "TABLE", name: "document_metadata" },
+      { type: "TABLE", name: "document_search" },
+      { type: "TABLE", name: "diagnostics" },
+      { type: "TABLE", name: "link_edges" },
+      { type: "TABLE", name: "catalog_metadata" },
+      { type: "INDEX", name: "document_tags_normalized" },
+    ];
+
+    for (const schemaObject of requiredSchemaObjects) {
+      const incompatible = new DatabaseSync(catalogFile);
+      incompatible.exec("PRAGMA foreign_keys = OFF");
+      incompatible.exec(`DROP ${schemaObject.type} ${schemaObject.name}`);
+      incompatible.close();
+
+      const recovered = createKnowledgeBase(root, {
+        cacheRoot,
+        profile: "schema",
+      });
+      await recovered.initialize();
+      expect(recovered.status()).toMatchObject({ state: "ready" });
+      await recovered.close();
+
+      const verified = new DatabaseSync(catalogFile, { readOnly: true });
+      expect(
+        verified
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?")
+          .get(schemaObject.type.toLowerCase(), schemaObject.name),
+      ).toBeDefined();
+      verified.close();
+    }
+
+    const invalidMetadata = [
+      { key: "revision" },
+      { key: "degraded-count", value: "-1" },
+      { key: "source-fingerprint", value: "not-a-fingerprint" },
+    ];
+    for (const metadata of invalidMetadata) {
+      const incompatible = new DatabaseSync(catalogFile);
+      if (metadata.value === undefined) {
+        incompatible
+          .prepare("DELETE FROM catalog_metadata WHERE key = ?")
+          .run(metadata.key);
+      } else {
+        incompatible
+          .prepare("UPDATE catalog_metadata SET value = ? WHERE key = ?")
+          .run(metadata.value, metadata.key);
+      }
+      incompatible.close();
+
+      const recovered = createKnowledgeBase(root, {
+        cacheRoot,
+        profile: "schema",
+      });
+      await recovered.initialize();
+      expect(recovered.status()).toMatchObject({ state: "ready" });
+      expect(await recovered.openHomeDocument()).toMatchObject({
+        title: "Главная",
+      });
+      await recovered.close();
+    }
+  });
+
   test("removes abandoned candidates and preserves a usable index after failed startup", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "indexary-interrupt-"));
     const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
@@ -353,11 +457,7 @@ describe("Knowledge Base", () => {
     });
     await first.initialize();
     await first.close();
-    const catalogRelative = (await readdir(cacheRoot, { recursive: true }))
-      .map(String)
-      .find((entry) => entry.endsWith("catalog.sqlite"));
-    expect(catalogRelative).toBeDefined();
-    const catalogFile = path.join(cacheRoot, catalogRelative!);
+    const catalogFile = await findCatalogFile(cacheRoot);
     const abandoned = path.join(
       path.dirname(catalogFile),
       ".catalog-candidate-interrupted.sqlite",
@@ -388,6 +488,61 @@ describe("Knowledge Base", () => {
     await failed.close();
     await rename(unavailableRoot, root);
     expect(await captureTree(root)).toEqual(before);
+  });
+
+  test("keeps unreadable Documents isolated and reports degraded readiness", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-unreadable-"));
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
+    temporaryDirectories.push(root, cacheRoot);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    const unreadablePath = path.join(root, "Недоступный.md");
+    await writeFile(unreadablePath, "# Секрет\n");
+    await chmod(unreadablePath, 0o000);
+
+    try {
+      const knowledgeBase = createKnowledgeBase(root, {
+        cacheRoot,
+        profile: "unreadable",
+      });
+      await knowledgeBase.initialize();
+      expect(knowledgeBase.status()).toEqual({
+        state: "ready",
+        degradedCount: 1,
+      });
+      expect(await knowledgeBase.openDocument("Недоступный.md")).toMatchObject({
+        diagnostics: [{ code: "DOCUMENT_UNREADABLE" }],
+      });
+      await knowledgeBase.close();
+    } finally {
+      await chmod(unreadablePath, 0o600);
+    }
+  });
+
+  test("reconciles a Document created while the first candidate is building", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-race-"));
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
+    temporaryDirectories.push(root, cacheRoot);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    await Promise.all(
+      Array.from({ length: 1_500 }, (_, index) =>
+        writeFile(path.join(root, `Документ-${index}.md`), `# ${index}\n`),
+      ),
+    );
+
+    const knowledgeBase = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "startup-race",
+    });
+    const initialization = knowledgeBase.initialize();
+    await waitForCandidate(cacheRoot);
+    await writeFile(path.join(root, "Поздний.md"), "# Поздний\n");
+    await initialization;
+
+    expect(knowledgeBase.status()).toMatchObject({ state: "ready" });
+    expect(await knowledgeBase.openDocument("Поздний.md")).toMatchObject({
+      title: "Поздний",
+    });
+    await knowledgeBase.close();
   });
 
   test("derives outgoing links and safe backlinks from the rendered interpretation", async () => {

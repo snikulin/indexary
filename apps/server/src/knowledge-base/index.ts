@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { watch, type FSWatcher } from "node:fs";
 import {
+  lstat,
   open,
   mkdir,
   readdir,
@@ -192,6 +193,7 @@ interface Discovery {
   folders: DiscoveredFolder[];
   documents: DiscoveredDocument[];
   diagnostics: CatalogDiagnostic[];
+  sourceFingerprint: string;
 }
 
 interface SqliteRow {
@@ -549,6 +551,7 @@ async function discoverKnowledgeBase(
   ];
   const documents: DiscoveredDocument[] = [];
   const diagnostics: CatalogDiagnostic[] = [];
+  const sourceState = createHash("sha256");
   const canonicalFolders = new Set([canonicalRoot]);
   const canonicalDocuments = new Set<string>();
   const symbolicLinks: Array<{
@@ -580,6 +583,17 @@ async function discoverKnowledgeBase(
       }
       const absolutePath = path.join(absoluteDirectory, entry.name);
       const relativePath = path.join(relativeDirectory, entry.name);
+      let entryMetadata;
+      try {
+        entryMetadata = await lstat(absolutePath);
+      } catch {
+        addDiagnostic(diagnostics, "CONTENT_UNAVAILABLE", relativePath);
+        sourceState.update(`${toCatalogPath(relativePath)}\0unavailable\0`);
+        continue;
+      }
+      sourceState.update(
+        `${toCatalogPath(relativePath)}\0${entryMetadata.mode}\0${entryMetadata.size}\0${entryMetadata.mtimeMs}\0${entryMetadata.ctimeMs}\0`,
+      );
 
       if (entry.isSymbolicLink()) {
         symbolicLinks.push({
@@ -701,7 +715,12 @@ async function discoverKnowledgeBase(
   folders.sort((left, right) => left.path.localeCompare(right.path, "en"));
   documents.sort((left, right) => left.path.localeCompare(right.path, "en"));
   diagnostics.sort((left, right) => left.path.localeCompare(right.path, "en"));
-  return { folders, documents, diagnostics };
+  return {
+    folders,
+    documents,
+    diagnostics,
+    sourceFingerprint: sourceState.digest("hex"),
+  };
 }
 
 function defaultCacheRoot(): string {
@@ -795,6 +814,18 @@ function catalogMetadata(
   return row === undefined ? undefined : String(row.value);
 }
 
+function nonNegativeIntegerMetadata(
+  database: DatabaseSync,
+  key: string,
+): number | undefined {
+  const stored = catalogMetadata(database, key);
+  if (stored === undefined || !/^(?:0|[1-9]\d*)$/.test(stored)) {
+    return undefined;
+  }
+  const value = Number(stored);
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function validateCatalog(
   database: DatabaseSync,
   identity: CatalogIdentity,
@@ -812,19 +843,45 @@ function validateCatalog(
       String(identity.formatVersion) ||
     catalogMetadata(database, "knowledge-base-id") !==
       identity.knowledgeBaseId ||
-    catalogMetadata(database, "profile") !== identity.profile
+    catalogMetadata(database, "profile") !== identity.profile ||
+    !/^[a-f0-9]{64}$/.test(
+      catalogMetadata(database, "source-fingerprint") ?? "",
+    ) ||
+    nonNegativeIntegerMetadata(database, "revision") === undefined ||
+    nonNegativeIntegerMetadata(database, "degraded-count") === undefined
   ) {
     throw new Error("The derived index is incompatible with this runtime.");
   }
+  const requiredSchemaProbes = [
+    "SELECT path, parent_path, name FROM folders LIMIT 1",
+    "SELECT path, folder_path, title, representation_json FROM documents LIMIT 1",
+    "SELECT document_path, id, kind, position, name, path, resolved_path, status, mime_type, size, preview, diagnostic_code, diagnostic_message, content_fingerprint FROM materials LIMIT 1",
+    "SELECT document_path, tag, normalized_tag FROM document_tags LIMIT 1",
+    "SELECT document_path, name, value FROM document_metadata LIMIT 1",
+    "SELECT document_path, title, tags, relative_path, metadata, body FROM document_search LIMIT 1",
+    "SELECT path, code, message FROM diagnostics LIMIT 1",
+    "SELECT source_path, ordinal, target, label, state, target_path, snippet FROM link_edges LIMIT 1",
+  ];
+  for (const probe of requiredSchemaProbes) {
+    database.prepare(probe).get();
+  }
   database
     .prepare(
-      `SELECT documents.path
-       FROM documents
-       JOIN document_search
-         ON document_search.document_path = documents.path
-       LIMIT 1`,
+      "SELECT document_path FROM document_search WHERE document_search MATCH ? LIMIT 1",
+    )
+    .get("indexary");
+  const tagIndex = database
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'document_tags_normalized'",
     )
     .get();
+  if (tagIndex === undefined) {
+    throw new Error("The derived index is missing a required search index.");
+  }
+  const foreignKeyFailure = database.prepare("PRAGMA foreign_key_check").get();
+  if (foreignKeyFailure !== undefined) {
+    throw new Error("The derived index failed its foreign-key check.");
+  }
 }
 
 function openCatalog(
@@ -842,13 +899,11 @@ function openCatalog(
 }
 
 function validStoredRevision(database: DatabaseSync): number {
-  const revision = Number(catalogMetadata(database, "revision") ?? 0);
-  return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
+  return nonNegativeIntegerMetadata(database, "revision") ?? 0;
 }
 
 function catalogDegradedCount(database: DatabaseSync): number {
-  const stored = Number(catalogMetadata(database, "degraded-count"));
-  return Number.isSafeInteger(stored) && stored >= 0 ? stored : 0;
+  return nonNegativeIntegerMetadata(database, "degraded-count") ?? 0;
 }
 
 async function removeAbandonedCandidates(namespace: string): Promise<void> {
@@ -886,8 +941,9 @@ async function buildCatalog(
   cacheRoot: string,
   profile: string,
   revision: number,
+  discovered?: Discovery,
 ): Promise<string> {
-  const discovery = await discoverKnowledgeBase(canonicalRoot);
+  const discovery = discovered ?? (await discoverKnowledgeBase(canonicalRoot));
   const { catalogFile, namespace, identity } = await catalogLocation(
     canonicalRoot,
     cacheRoot,
@@ -1157,6 +1213,9 @@ async function buildCatalog(
     database
       .prepare("INSERT INTO catalog_metadata(key, value) VALUES (?, ?)")
       .run("degraded-count", String(degradedCount));
+    database
+      .prepare("INSERT INTO catalog_metadata(key, value) VALUES (?, ?)")
+      .run("source-fingerprint", discovery.sourceFingerprint);
     database.exec("COMMIT");
     database.close();
     database = undefined;
@@ -1175,89 +1234,78 @@ async function buildCatalog(
   }
 }
 
-function queryCatalog<T>(
-  database: DatabaseSync,
-  query: (database: DatabaseSync) => T,
-): T {
-  return query(database);
-}
-
 function snapshotCatalog(database: DatabaseSync): CatalogSnapshot {
-  return queryCatalog(database, (database) => {
-    const folders = database
-      .prepare("SELECT path, parent_path, name FROM folders ORDER BY path")
-      .all() as unknown as SqliteRow[];
-    const diagnostics = database
-      .prepare(
-        "SELECT path, code, message FROM diagnostics ORDER BY path, code",
-      )
-      .all() as unknown as SqliteRow[];
-    const documentRows = database
-      .prepare(
-        "SELECT path, folder_path, title, representation_json FROM documents ORDER BY path",
-      )
-      .all() as unknown as SqliteRow[];
-    const materials = database
-      .prepare(
-        `SELECT document_path, id, kind, position, name, path, resolved_path,
+  const folders = database
+    .prepare("SELECT path, parent_path, name FROM folders ORDER BY path")
+    .all() as unknown as SqliteRow[];
+  const diagnostics = database
+    .prepare("SELECT path, code, message FROM diagnostics ORDER BY path, code")
+    .all() as unknown as SqliteRow[];
+  const documentRows = database
+    .prepare(
+      "SELECT path, folder_path, title, representation_json FROM documents ORDER BY path",
+    )
+    .all() as unknown as SqliteRow[];
+  const materials = database
+    .prepare(
+      `SELECT document_path, id, kind, position, name, path, resolved_path,
                 status, mime_type, size, preview, diagnostic_code,
                 diagnostic_message, content_fingerprint
          FROM materials ORDER BY document_path, position, id`,
-      )
-      .all() as unknown as SqliteRow[];
-    const incomingLinks = database
-      .prepare(
-        `SELECT links.target_path AS document_path, links.source_path,
+    )
+    .all() as unknown as SqliteRow[];
+  const incomingLinks = database
+    .prepare(
+      `SELECT links.target_path AS document_path, links.source_path,
                 documents.title, links.ordinal, links.snippet
          FROM link_edges AS links
          JOIN documents ON documents.path = links.source_path
          WHERE links.state = 'resolved'
          ORDER BY links.target_path, links.source_path, links.ordinal`,
-      )
-      .all() as unknown as SqliteRow[];
+    )
+    .all() as unknown as SqliteRow[];
 
-    const materialsByDocument = new Map<string, SqliteRow[]>();
-    for (const material of materials) {
-      const documentPath = String(material.document_path);
-      const grouped = materialsByDocument.get(documentPath) ?? [];
-      grouped.push(material);
-      materialsByDocument.set(documentPath, grouped);
-    }
-    const backlinksByDocument = new Map<string, SqliteRow[]>();
-    for (const link of incomingLinks) {
-      const documentPath = String(link.document_path);
-      const grouped = backlinksByDocument.get(documentPath) ?? [];
-      grouped.push(link);
-      backlinksByDocument.set(documentPath, grouped);
-    }
+  const materialsByDocument = new Map<string, SqliteRow[]>();
+  for (const material of materials) {
+    const documentPath = String(material.document_path);
+    const grouped = materialsByDocument.get(documentPath) ?? [];
+    grouped.push(material);
+    materialsByDocument.set(documentPath, grouped);
+  }
+  const backlinksByDocument = new Map<string, SqliteRow[]>();
+  for (const link of incomingLinks) {
+    const documentPath = String(link.document_path);
+    const grouped = backlinksByDocument.get(documentPath) ?? [];
+    grouped.push(link);
+    backlinksByDocument.set(documentPath, grouped);
+  }
 
-    const documents = new Map<string, string>();
-    for (const row of documentRows) {
-      const documentPath = String(row.path);
-      documents.set(
-        documentPath,
-        JSON.stringify({
-          title: row.title,
-          representation: row.representation_json,
-          materials: materialsByDocument.get(documentPath) ?? [],
-          backlinks: backlinksByDocument.get(documentPath) ?? [],
-        }),
-      );
-    }
-
-    return {
-      catalog: JSON.stringify({
-        folders,
-        diagnostics,
-        documents: documentRows.map((row) => ({
-          path: row.path,
-          folder: row.folder_path,
-          title: row.title,
-        })),
+  const documents = new Map<string, string>();
+  for (const row of documentRows) {
+    const documentPath = String(row.path);
+    documents.set(
+      documentPath,
+      JSON.stringify({
+        title: row.title,
+        representation: row.representation_json,
+        materials: materialsByDocument.get(documentPath) ?? [],
+        backlinks: backlinksByDocument.get(documentPath) ?? [],
       }),
-      documents,
-    };
-  });
+    );
+  }
+
+  return {
+    catalog: JSON.stringify({
+      folders,
+      diagnostics,
+      documents: documentRows.map((row) => ({
+        path: row.path,
+        folder: row.folder_path,
+        title: row.title,
+      })),
+    }),
+    documents,
+  };
 }
 
 function updateCatalogRevision(database: DatabaseSync, revision: number): void {
@@ -1406,11 +1454,9 @@ export function createKnowledgeBase(
   }
 
   function updateStatus(activeDatabase: DatabaseSync): void {
-    const home = queryCatalog(activeDatabase, (database) =>
-      database
-        .prepare("SELECT path FROM documents WHERE path = ?")
-        .get(HOME_DOCUMENT_PATH),
-    );
+    const home = activeDatabase
+      .prepare("SELECT path FROM documents WHERE path = ?")
+      .get(HOME_DOCUMENT_PATH);
     currentStatus =
       home === undefined
         ? { state: "home-document-unavailable" }
@@ -1421,7 +1467,6 @@ export function createKnowledgeBase(
   }
 
   async function reconcile(updateReadiness = true): Promise<void> {
-    const file = catalogFile;
     const activeDatabase = database;
     const identity = catalogIdentityValue;
     const canonicalRoot = canonicalKnowledgeBaseRoot;
@@ -1429,7 +1474,6 @@ export function createKnowledgeBase(
     const selectedProfile = profile;
     if (
       closed ||
-      file === undefined ||
       activeDatabase === undefined ||
       identity === undefined ||
       canonicalRoot === undefined ||
@@ -1439,61 +1483,97 @@ export function createKnowledgeBase(
       return;
     }
 
+    const discovery = await discoverKnowledgeBase(canonicalRoot);
     const observedPaths = new Set(observedDocumentPaths);
     for (const observedPath of observedPaths) {
       observedDocumentPaths.delete(observedPath);
     }
+    if (
+      catalogMetadata(activeDatabase, "source-fingerprint") ===
+      discovery.sourceFingerprint
+    ) {
+      const changes = [...observedPaths]
+        .sort((left, right) => left.localeCompare(right, "en"))
+        .map((documentPath) => {
+          currentRevision += 1;
+          const exists = activeDatabase
+            .prepare("SELECT 1 FROM documents WHERE path = ?")
+            .get(documentPath);
+          return {
+            revision: currentRevision,
+            type:
+              exists === undefined
+                ? ("document-removed" as const)
+                : ("document-changed" as const),
+            path: documentPath,
+          };
+        });
+      if (changes.length > 0) {
+        updateCatalogRevision(activeDatabase, currentRevision);
+      }
+      for (const change of changes) {
+        publish(change);
+      }
+      return;
+    }
+
     const previous = snapshotCatalog(activeDatabase);
     const rebuiltFile = await buildCatalog(
       canonicalRoot,
       resolvedCacheRoot,
       selectedProfile,
       currentRevision,
+      discovery,
     );
     const nextDatabase = openCatalog(rebuiltFile, identity);
-    const next = snapshotCatalog(nextDatabase);
-    const changes: Array<Omit<KnowledgeBaseChange, "revision">> = [];
-    if (previous.catalog !== next.catalog) {
-      changes.push({ type: "catalog-changed" });
-    }
-    for (const [documentPath, signature] of next.documents) {
-      if (previous.documents.get(documentPath) !== signature) {
-        changes.push({ type: "document-changed", path: documentPath });
+    try {
+      const next = snapshotCatalog(nextDatabase);
+      const changes: Array<Omit<KnowledgeBaseChange, "revision">> = [];
+      if (previous.catalog !== next.catalog) {
+        changes.push({ type: "catalog-changed" });
       }
-    }
-    for (const documentPath of previous.documents.keys()) {
-      if (!next.documents.has(documentPath)) {
-        changes.push({ type: "document-removed", path: documentPath });
+      for (const [documentPath, signature] of next.documents) {
+        if (previous.documents.get(documentPath) !== signature) {
+          changes.push({ type: "document-changed", path: documentPath });
+        }
       }
-    }
-    const changedPaths = new Set(changes.map((change) => change.path));
-    for (const observedPath of observedPaths) {
-      if (changedPaths.has(observedPath)) {
-        continue;
+      for (const documentPath of previous.documents.keys()) {
+        if (!next.documents.has(documentPath)) {
+          changes.push({ type: "document-removed", path: documentPath });
+        }
       }
-      changes.push({
-        type: next.documents.has(observedPath)
-          ? "document-changed"
-          : "document-removed",
-        path: observedPath,
-      });
-    }
+      const changedPaths = new Set(changes.map((change) => change.path));
+      for (const observedPath of observedPaths) {
+        if (changedPaths.has(observedPath)) {
+          continue;
+        }
+        changes.push({
+          type: next.documents.has(observedPath)
+            ? "document-changed"
+            : "document-removed",
+          path: observedPath,
+        });
+      }
 
-    const revisionedChanges = changes.map((change) => {
-      currentRevision += 1;
-      return { ...change, revision: currentRevision };
-    });
-    if (revisionedChanges.length > 0) {
-      updateCatalogRevision(nextDatabase, currentRevision);
-    }
-    catalogFile = rebuiltFile;
-    database = nextDatabase;
-    activeDatabase.close();
-    if (updateReadiness) {
-      updateStatus(nextDatabase);
-    }
-    for (const change of revisionedChanges) {
-      publish(change);
+      const revisionedChanges = changes.map((change) => {
+        currentRevision += 1;
+        return { ...change, revision: currentRevision };
+      });
+      if (revisionedChanges.length > 0) {
+        updateCatalogRevision(nextDatabase, currentRevision);
+      }
+      activeDatabase.close();
+      catalogFile = rebuiltFile;
+      database = nextDatabase;
+      if (updateReadiness) {
+        updateStatus(nextDatabase);
+      }
+      for (const change of revisionedChanges) {
+        publish(change);
+      }
+    } catch (error) {
+      nextDatabase.close();
+      throw error;
     }
   }
 
@@ -1662,107 +1742,103 @@ export function createKnowledgeBase(
     },
     async browseFolder(folderPath = "") {
       const normalized = validateRelativePath(folderPath, true);
-      const file = await initializedCatalog();
-      if (file === undefined) {
+      const activeDatabase = await initializedCatalog();
+      if (activeDatabase === undefined) {
         return undefined;
       }
-      return queryCatalog(file, (database) => {
-        const folder = database
-          .prepare("SELECT path, name FROM folders WHERE path = ?")
-          .get(normalized) as SqliteRow | undefined;
-        if (folder === undefined) {
-          return undefined;
-        }
-        const folders = database
-          .prepare(
-            "SELECT path, name FROM folders WHERE parent_path = ? ORDER BY path",
-          )
-          .all(normalized) as unknown as SqliteRow[];
-        const documents = database
-          .prepare(
-            "SELECT path, title FROM documents WHERE folder_path = ? ORDER BY path",
-          )
-          .all(normalized) as unknown as SqliteRow[];
-        const diagnostics = database
-          .prepare("SELECT path, code, message FROM diagnostics ORDER BY path")
-          .all() as unknown as SqliteRow[];
-        return {
-          path: String(folder.path),
-          name: String(folder.name),
-          folders: folders.map((row) => ({
-            path: String(row.path),
-            name: String(row.name),
-          })),
-          documents: documents.map((row) => ({
-            path: String(row.path),
-            title: String(row.title),
-          })),
-          diagnostics: diagnostics.map((row) => ({
-            path: String(row.path),
-            code: String(row.code) as CatalogDiagnosticCode,
-            message: String(row.message),
-          })),
-        };
-      });
+      const folder = activeDatabase
+        .prepare("SELECT path, name FROM folders WHERE path = ?")
+        .get(normalized) as SqliteRow | undefined;
+      if (folder === undefined) {
+        return undefined;
+      }
+      const folders = activeDatabase
+        .prepare(
+          "SELECT path, name FROM folders WHERE parent_path = ? ORDER BY path",
+        )
+        .all(normalized) as unknown as SqliteRow[];
+      const documents = activeDatabase
+        .prepare(
+          "SELECT path, title FROM documents WHERE folder_path = ? ORDER BY path",
+        )
+        .all(normalized) as unknown as SqliteRow[];
+      const diagnostics = activeDatabase
+        .prepare("SELECT path, code, message FROM diagnostics ORDER BY path")
+        .all() as unknown as SqliteRow[];
+      return {
+        path: String(folder.path),
+        name: String(folder.name),
+        folders: folders.map((row) => ({
+          path: String(row.path),
+          name: String(row.name),
+        })),
+        documents: documents.map((row) => ({
+          path: String(row.path),
+          title: String(row.title),
+        })),
+        diagnostics: diagnostics.map((row) => ({
+          path: String(row.path),
+          code: String(row.code) as CatalogDiagnosticCode,
+          message: String(row.message),
+        })),
+      };
     },
     async openDocument(documentPath) {
       const normalized = validateRelativePath(documentPath, false);
-      const file = await initializedCatalog();
-      if (file === undefined) {
+      const activeDatabase = await initializedCatalog();
+      if (activeDatabase === undefined) {
         return undefined;
       }
-      return queryCatalog(file, (database) => {
-        const row = database
-          .prepare(
-            `SELECT documents.representation_json,
+      const row = activeDatabase
+        .prepare(
+          `SELECT documents.representation_json,
                     catalog_metadata.value AS revision
              FROM documents
              JOIN catalog_metadata ON catalog_metadata.key = 'revision'
              WHERE documents.path = ?`,
-          )
-          .get(normalized) as SqliteRow | undefined;
-        if (row === undefined) {
-          return undefined;
-        }
-        const materialRows = database
-          .prepare(
-            "SELECT * FROM materials WHERE document_path = ? ORDER BY position",
-          )
-          .all(normalized) as unknown as SqliteRow[];
-        const materials = materialRows.map(materialFromRow);
-        const interpreted = JSON.parse(
-          String(row.representation_json),
-        ) as DocumentRepresentation;
-        const backlinkRows = database
-          .prepare(
-            `SELECT links.source_path AS path, documents.title, links.snippet
+        )
+        .get(normalized) as SqliteRow | undefined;
+      if (row === undefined) {
+        return undefined;
+      }
+      const materialRows = activeDatabase
+        .prepare(
+          "SELECT * FROM materials WHERE document_path = ? ORDER BY position",
+        )
+        .all(normalized) as unknown as SqliteRow[];
+      const materials = materialRows.map(materialFromRow);
+      const interpreted = JSON.parse(
+        String(row.representation_json),
+      ) as DocumentRepresentation;
+      const backlinkRows = activeDatabase
+        .prepare(
+          `SELECT links.source_path AS path, documents.title, links.snippet
              FROM link_edges AS links
              JOIN documents ON documents.path = links.source_path
              WHERE links.state = 'resolved' AND links.target_path = ?
              ORDER BY links.source_path, links.ordinal`,
-          )
-          .all(normalized) as unknown as SqliteRow[];
-        const backlinks: Backlink[] = backlinkRows.map((backlink) => ({
-          path: String(backlink.path),
-          title: String(backlink.title),
-          snippet: String(backlink.snippet),
-        }));
-        const { attachmentPaths, ...document } = interpreted;
-        void attachmentPaths;
-        return {
-          ...document,
-          revision: Number(row.revision),
-          backlinks,
-          materials: {
-            sourceMaterials: materials.filter(
-              (material) => material.kind === "source-material",
-            ),
-            attachments: materials.filter(
-              (material) => material.kind === "attachment",
-            ),
-          },
-        };
-      });
+        )
+        .all(normalized) as unknown as SqliteRow[];
+      const backlinks: Backlink[] = backlinkRows.map((backlink) => ({
+        path: String(backlink.path),
+        title: String(backlink.title),
+        snippet: String(backlink.snippet),
+      }));
+      const { attachmentPaths, ...document } = interpreted;
+      void attachmentPaths;
+      return {
+        ...document,
+        revision: Number(row.revision),
+        backlinks,
+        materials: {
+          sourceMaterials: materials.filter(
+            (material) => material.kind === "source-material",
+          ),
+          attachments: materials.filter(
+            (material) => material.kind === "attachment",
+          ),
+        },
+      };
     },
     async openHomeDocument() {
       return (await this.openDocument(HOME_DOCUMENT_PATH)) as
@@ -1773,19 +1849,17 @@ export function createKnowledgeBase(
       if (!/^(?:source-material|attachment)-\d+$/.test(materialId)) {
         throw new InvalidKnowledgeBasePath("The material id is invalid.");
       }
-      const file = await initializedCatalog();
+      const activeDatabase = await initializedCatalog();
       const canonicalRoot = canonicalKnowledgeBaseRoot;
-      if (file === undefined || canonicalRoot === undefined) {
+      if (activeDatabase === undefined || canonicalRoot === undefined) {
         return undefined;
       }
-      const row = queryCatalog(file, (database) =>
-        database
-          .prepare(
-            `SELECT name, resolved_path, status, mime_type, preview
-             FROM materials WHERE document_path = ? AND id = ?`,
-          )
-          .get(normalizedDocument, materialId),
-      ) as SqliteRow | undefined;
+      const row = activeDatabase
+        .prepare(
+          `SELECT name, resolved_path, status, mime_type, preview
+           FROM materials WHERE document_path = ? AND id = ?`,
+        )
+        .get(normalizedDocument, materialId) as SqliteRow | undefined;
       if (
         row === undefined ||
         row.status !== "available" ||
@@ -1834,17 +1908,16 @@ export function createKnowledgeBase(
         return [];
       }
 
-      const file = await initializedCatalog();
-      if (file === undefined) {
+      const activeDatabase = await initializedCatalog();
+      if (activeDatabase === undefined) {
         return [];
       }
       const normalizedTag = tag === "" ? undefined : normalizeTag(tag);
 
       if (query === "") {
-        return queryCatalog(file, (database) => {
-          const rows = database
-            .prepare(
-              `SELECT path, title, representation_json
+        const rows = activeDatabase
+          .prepare(
+            `SELECT path, title, representation_json
                FROM documents
                WHERE EXISTS (
                  SELECT 1 FROM document_tags
@@ -1852,23 +1925,22 @@ export function createKnowledgeBase(
                    AND normalized_tag = ?
                )
                ORDER BY title, path`,
-            )
-            .all(normalizedTag!) as unknown as SqliteRow[];
-          return rows.map((row) => {
-            const result = searchResultFromRow(row);
-            const matchingTag = result.tags.find(
-              (candidate) => normalizeTag(candidate) === normalizedTag,
-            );
-            return {
-              ...result,
-              snippet: [
-                {
-                  text: matchingTag ?? tag,
-                  highlighted: true,
-                },
-              ],
-            };
-          });
+          )
+          .all(normalizedTag!) as unknown as SqliteRow[];
+        return rows.map((row) => {
+          const result = searchResultFromRow(row);
+          const matchingTag = result.tags.find(
+            (candidate) => normalizeTag(candidate) === normalizedTag,
+          );
+          return {
+            ...result,
+            snippet: [
+              {
+                text: matchingTag ?? tag,
+                highlighted: true,
+              },
+            ],
+          };
         });
       }
 
@@ -1877,10 +1949,9 @@ export function createKnowledgeBase(
         return [];
       }
 
-      return queryCatalog(file, (database) => {
-        const rows = database
-          .prepare(
-            `SELECT document_search.document_path AS path,
+      const rows = activeDatabase
+        .prepare(
+          `SELECT document_search.document_path AS path,
                     documents.title,
                     documents.representation_json,
                     snippet(document_search, -1, ?, ?, ' … ', 24) AS snippet,
@@ -1896,16 +1967,15 @@ export function createKnowledgeBase(
                  )
                )
              ORDER BY score, documents.path`,
-          )
-          .all(
-            SNIPPET_START,
-            SNIPPET_END,
-            matchExpression,
-            normalizedTag ?? null,
-            normalizedTag ?? null,
-          ) as unknown as SqliteRow[];
-        return rows.map((row) => searchResultFromRow(row, String(row.snippet)));
-      });
+        )
+        .all(
+          SNIPPET_START,
+          SNIPPET_END,
+          matchExpression,
+          normalizedTag ?? null,
+          normalizedTag ?? null,
+        ) as unknown as SqliteRow[];
+      return rows.map((row) => searchResultFromRow(row, String(row.snippet)));
     },
   };
 }

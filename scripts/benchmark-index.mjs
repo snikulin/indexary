@@ -9,9 +9,10 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { performance } from "node:perf_hooks";
 import os from "node:os";
 import path from "node:path";
+import { clearInterval, setInterval } from "node:timers";
 import { setTimeout as delayFor } from "node:timers/promises";
 
 import { createKnowledgeBase } from "../apps/server/dist/index.js";
@@ -21,6 +22,8 @@ const MATERIAL_BYTES = 1_000_000;
 const COLD_INDEX_TARGET_MS = 30_000;
 const SEARCH_TARGET_MS = 200;
 const EVENT_LOOP_TARGET_MS = 200;
+const EVENT_LOOP_CALIBRATION_BLOCK_MS = 100;
+const EVENT_LOOP_CALIBRATION_MIN_MS = 75;
 const BATCH_SIZE = 256;
 
 async function batches(count, operation) {
@@ -72,24 +75,56 @@ async function generateWorkload(root) {
   });
 }
 
+function createEventLoopMonitor(intervalMs = 10) {
+  let expectedAt = performance.now() + intervalMs;
+  let maxDelayMs = 0;
+  const timer = setInterval(() => {
+    const now = performance.now();
+    maxDelayMs = Math.max(maxDelayMs, now - expectedAt);
+    expectedAt = now + intervalMs;
+  }, intervalMs);
+  return {
+    async stop() {
+      await delayFor(intervalMs * 2);
+      clearInterval(timer);
+      return maxDelayMs;
+    },
+  };
+}
+
+async function calibrateEventLoopMonitor() {
+  const monitor = createEventLoopMonitor();
+  const blockedUntil = performance.now() + EVENT_LOOP_CALIBRATION_BLOCK_MS;
+  while (performance.now() < blockedUntil) {
+    // Deliberately empty: prove the monitor observes a known synchronous stall.
+  }
+  const observedMs = await monitor.stop();
+  if (observedMs < EVENT_LOOP_CALIBRATION_MIN_MS) {
+    throw new Error(
+      `Event-loop monitor calibration failed: ${observedMs.toFixed(2)} ms observed.`,
+    );
+  }
+  return observedMs;
+}
+
 const root = await mkdtemp(path.join(os.tmpdir(), "indexary-benchmark-kb-"));
 const cacheRoot = await mkdtemp(
   path.join(os.tmpdir(), "indexary-benchmark-cache-"),
 );
 
 try {
+  const eventLoopCalibrationMs = await calibrateEventLoopMonitor();
   await generateWorkload(root);
   const before = await workloadFingerprint(root);
   if (before.materialBytes !== DOCUMENT_COUNT * MATERIAL_BYTES) {
     throw new Error("The generated workload is not exactly 10 GB.");
   }
 
-  const delay = monitorEventLoopDelay({ resolution: 10 });
+  const eventLoopMonitor = createEventLoopMonitor();
   const knowledgeBase = createKnowledgeBase(root, {
     cacheRoot,
     profile: "support-target",
   });
-  delay.enable();
   const indexStarted = performance.now();
   await knowledgeBase.initialize();
   const coldIndexMs = performance.now() - indexStarted;
@@ -110,18 +145,26 @@ try {
       );
     }
   }
-  await delayFor(20);
-  delay.disable();
-  const maxEventLoopDelayMs = Number(delay.max) / 1_000_000;
+  const maxEventLoopDelayMs = await eventLoopMonitor.stop();
   await knowledgeBase.close();
+  const warmKnowledgeBase = createKnowledgeBase(root, {
+    cacheRoot,
+    profile: "support-target",
+  });
+  const warmStarted = performance.now();
+  await warmKnowledgeBase.initialize();
+  const warmReconcileMs = performance.now() - warmStarted;
+  await warmKnowledgeBase.close();
   const after = await workloadFingerprint(root);
 
   const report = {
     documents: DOCUMENT_COUNT,
     materialBytes: before.materialBytes,
     coldIndexMs: Math.round(coldIndexMs * 100) / 100,
+    warmReconcileMs: Math.round(warmReconcileMs * 100) / 100,
     maxSearchMs: Math.round(Math.max(...searchMs) * 100) / 100,
     maxEventLoopDelayMs: Math.round(maxEventLoopDelayMs * 100) / 100,
+    eventLoopCalibrationMs: Math.round(eventLoopCalibrationMs * 100) / 100,
     knowledgeBaseUnchanged: before.digest === after.digest,
     targets: {
       coldIndexMs: COLD_INDEX_TARGET_MS,
