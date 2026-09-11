@@ -1,4 +1,5 @@
 import fastifyStatic from "@fastify/static";
+import type { ServerResponse } from "node:http";
 import {
   Type,
   TypeBoxTypeProvider,
@@ -38,6 +39,7 @@ const WikilinkState = Type.Union([
 ]);
 const DocumentResponse = Type.Object(
   {
+    revision: Type.Integer({ minimum: 0 }),
     path: Type.String({ minLength: 1 }),
     title: Type.String({ minLength: 1 }),
     html: Type.String(),
@@ -310,6 +312,15 @@ export async function buildApplication(
     TypeBoxValidatorCompiler,
   );
   const typedApp = app.withTypeProvider<TypeBoxTypeProvider>();
+  const eventStreams = new Set<ServerResponse>();
+
+  app.addHook("preClose", async () => {
+    for (const stream of eventStreams) {
+      stream.end();
+    }
+    eventStreams.clear();
+    await knowledgeBase.close();
+  });
 
   typedApp.get(
     "/api/health/live",
@@ -398,6 +409,7 @@ export async function buildApplication(
           {
             document: Type.String({ minLength: 1 }),
             id: Type.String({ minLength: 1 }),
+            revision: Type.Optional(Type.Integer({ minimum: 0 })),
           },
           { additionalProperties: false },
         ),
@@ -488,6 +500,46 @@ export async function buildApplication(
       }),
     }),
   );
+
+  typedApp.get("/api/events", async (request, reply) => {
+    const rawLastEventId = request.headers["last-event-id"];
+    const parsedLastEventId =
+      typeof rawLastEventId === "string" && /^\d+$/.test(rawLastEventId)
+        ? Number(rawLastEventId)
+        : undefined;
+    const lastEventId =
+      parsedLastEventId !== undefined && Number.isSafeInteger(parsedLastEventId)
+        ? parsedLastEventId
+        : undefined;
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    });
+    eventStreams.add(reply.raw);
+    reply.raw.write(": connected\n\n");
+
+    const unsubscribe = knowledgeBase.subscribeChanges(
+      lastEventId,
+      (change) => {
+        reply.raw.write(`id: ${change.revision}\n`);
+        reply.raw.write(`event: ${change.type}\n`);
+        reply.raw.write(`data: ${JSON.stringify(change)}\n\n`);
+      },
+    );
+    const heartbeat = setInterval(() => {
+      reply.raw.write(": keep-alive\n\n");
+    }, 15_000);
+    request.raw.once("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      eventStreams.delete(reply.raw);
+    });
+    return reply;
+  });
 
   typedApp.get(
     "/api/health/ready",

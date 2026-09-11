@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { get as httpGet, type ClientRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,6 +32,91 @@ function config(knowledgeBasePath: string, webRoot?: string): RuntimeConfig {
     cacheRoot: testCacheRoot,
     ...(webRoot === undefined ? {} : { webRoot }),
   };
+}
+
+async function eventually(
+  assertion: () => Promise<void>,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      await assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+  }
+  throw lastError;
+}
+
+interface ObservedServerEvent {
+  event: string;
+  id: number;
+  data: Record<string, unknown>;
+  raw: string;
+}
+
+async function observeServerEvents(
+  url: string,
+  lastEventId?: number,
+): Promise<{
+  events: ObservedServerEvent[];
+  close: () => void;
+}> {
+  const events: ObservedServerEvent[] = [];
+  let request: ClientRequest | undefined;
+  await new Promise<void>((resolve, reject) => {
+    request = httpGet(
+      url,
+      {
+        ...(lastEventId === undefined
+          ? {}
+          : { headers: { "last-event-id": String(lastEventId) } }),
+      },
+      (response) => {
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["content-type"]).toContain("text/event-stream");
+        response.setEncoding("utf8");
+        let buffer = "";
+        response.on("data", (chunk: string) => {
+          buffer += chunk.replaceAll("\r\n", "\n");
+          let boundary = buffer.indexOf("\n\n");
+          while (boundary !== -1) {
+            const raw = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            if (!raw.startsWith(":")) {
+              const fields = Object.fromEntries(
+                raw.split("\n").map((line) => {
+                  const separator = line.indexOf(":");
+                  return [
+                    line.slice(0, separator),
+                    line.slice(separator + 1).trimStart(),
+                  ];
+                }),
+              );
+              events.push({
+                event: fields.event ?? "message",
+                id: Number(fields.id),
+                data: JSON.parse(fields.data ?? "{}") as Record<
+                  string,
+                  unknown
+                >,
+                raw,
+              });
+            }
+            boundary = buffer.indexOf("\n\n");
+          }
+          resolve();
+        });
+        response.on("error", reject);
+      },
+    );
+    request.on("error", reject);
+  });
+  return { events, close: () => request?.destroy() };
 }
 
 beforeEach(async () => {
@@ -521,6 +614,208 @@ original_path: materials/legacy.eml
     ]);
     await app.close();
     expect(await captureTree(root)).toEqual(before);
+  });
+});
+
+describe("live external Knowledge Base changes", () => {
+  test("reconciles live CRUD, relationships, materials, search, and revisioned SSE atomically", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-live-"));
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, "files"));
+    await writeFile(path.join(root, "files", "source.bin"), "one");
+    await writeFile(
+      path.join(root, "index.md"),
+      `---
+originals: [files/source.bin]
+---
+# Главная
+
+[[Наблюдаемый]]
+`,
+    );
+    const app = await buildApplication(config(root));
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    let stream = await observeServerEvents(`${address}/api/events`);
+
+    try {
+      const createdPath = path.join(root, "Наблюдаемый.md");
+      await writeFile(
+        createdPath,
+        "# Первая версия\n\nуникальный-поисковый-маркер\n",
+      );
+      await eventually(async () => {
+        const catalog = await app.inject("/api/catalog");
+        expect(catalog.json().documents).toContainEqual({
+          path: "Наблюдаемый.md",
+          title: "Первая версия",
+        });
+        const search = await app.inject(
+          "/api/search?q=уникальный-поисковый-маркер",
+        );
+        expect(search.json().results).toEqual([
+          expect.objectContaining({ path: "Наблюдаемый.md" }),
+        ]);
+        const home = await app.inject("/api/documents/home");
+        expect(home.json().outgoingLinks).toContainEqual(
+          expect.objectContaining({
+            state: "resolved",
+            path: "Наблюдаемый.md",
+          }),
+        );
+        const created = await app.inject(
+          "/api/documents?path=%D0%9D%D0%B0%D0%B1%D0%BB%D1%8E%D0%B4%D0%B0%D0%B5%D0%BC%D1%8B%D0%B9.md",
+        );
+        expect(created.json().backlinks).toContainEqual(
+          expect.objectContaining({ path: "index.md" }),
+        );
+      });
+
+      await eventually(async () => {
+        expect(
+          stream.events.filter(
+            (event) =>
+              event.event === "document-changed" &&
+              event.data.path === "Наблюдаемый.md",
+          ),
+        ).toHaveLength(1);
+      });
+
+      const disconnectedAt = stream.events.at(-1)?.id;
+      expect(disconnectedAt).toBeDefined();
+      stream.close();
+
+      await writeFile(
+        createdPath,
+        "# Вторая версия\n\nобновлённый-поисковый-маркер\n",
+      );
+      await eventually(async () => {
+        const document = await app.inject({
+          method: "GET",
+          url: "/api/documents",
+          query: { path: "Наблюдаемый.md" },
+        });
+        expect(document.json()).toMatchObject({ title: "Вторая версия" });
+        expect(document.json().html).toContain("обновлённый-поисковый-маркер");
+        expect(
+          (await app.inject("/api/search?q=уникальный-поисковый-маркер")).json()
+            .results,
+        ).toEqual([]);
+      });
+      stream = await observeServerEvents(
+        `${address}/api/events`,
+        disconnectedAt,
+      );
+      await eventually(async () => {
+        expect(
+          stream.events.some(
+            (event) =>
+              event.event === "document-changed" &&
+              event.data.path === "Наблюдаемый.md",
+          ),
+        ).toBe(true);
+      });
+
+      const homeBeforeMaterialChange = (
+        await app.inject("/api/documents/home")
+      ).json() as { revision: number };
+      await writeFile(path.join(root, "files", "source.bin"), "one-two-three");
+      await eventually(async () => {
+        const home = await app.inject("/api/documents/home");
+        expect(home.json().revision).toBeGreaterThan(
+          homeBeforeMaterialChange.revision,
+        );
+        expect(home.json().materials.sourceMaterials[0]).toMatchObject({
+          status: "available",
+          size: 13,
+        });
+      });
+
+      const renamedPath = path.join(root, "Переименованный.md");
+      await rename(createdPath, renamedPath);
+      await eventually(async () => {
+        expect(
+          (
+            await app.inject({
+              method: "GET",
+              url: "/api/documents",
+              query: { path: "Наблюдаемый.md" },
+            })
+          ).statusCode,
+        ).toBe(404);
+        expect(
+          (
+            await app.inject({
+              method: "GET",
+              url: "/api/documents",
+              query: { path: "Переименованный.md" },
+            })
+          ).json(),
+        ).toMatchObject({ title: "Вторая версия" });
+        expect(
+          (
+            await app.inject("/api/search?q=обновлённый-поисковый-маркер")
+          ).json().results,
+        ).toEqual([expect.objectContaining({ path: "Переименованный.md" })]);
+        expect(
+          (await app.inject("/api/documents/home")).json().outgoingLinks,
+        ).toContainEqual(expect.objectContaining({ state: "missing" }));
+      });
+
+      await rm(renamedPath);
+      await eventually(async () => {
+        expect(
+          (
+            await app.inject({
+              method: "GET",
+              url: "/api/documents",
+              query: { path: "Переименованный.md" },
+            })
+          ).statusCode,
+        ).toBe(404);
+        expect(
+          (
+            await app.inject("/api/search?q=обновлённый-поисковый-маркер")
+          ).json().results,
+        ).toEqual([]);
+      });
+
+      await eventually(async () => {
+        expect(
+          stream.events.some((event) => event.event === "document-removed"),
+        ).toBe(true);
+      });
+      expect(stream.events.map((event) => event.id)).toEqual(
+        [...stream.events.map((event) => event.id)].sort(
+          (left, right) => left - right,
+        ),
+      );
+      expect(new Set(stream.events.map((event) => event.id)).size).toBe(
+        stream.events.length,
+      );
+      expect(stream.events.map((event) => event.event)).toEqual(
+        expect.arrayContaining([
+          "catalog-changed",
+          "document-changed",
+          "document-removed",
+        ]),
+      );
+      for (const event of stream.events) {
+        expect(Object.keys(event.data).sort()).toEqual(
+          expect.arrayContaining(["revision", "type"]),
+        );
+        expect(event.raw).not.toContain("поисковый-маркер");
+        expect(event.raw).not.toContain("Вторая версия");
+        expect(event.raw).not.toContain("eventType");
+        expect(event.raw).not.toContain("filename");
+      }
+
+      const externallyChangedTree = await captureTree(root);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(await captureTree(root)).toEqual(externallyChangedTree);
+    } finally {
+      await app.close();
+      stream.close();
+    }
   });
 });
 

@@ -229,12 +229,12 @@ describe("Knowledge Base", () => {
     expect(fixtureCatalog).toBeDefined();
     expect(personalCatalog).toBeDefined();
     expect(fixtureCatalog).not.toBe(personalCatalog);
-    expect(fixtureCatalog).toContain(`catalog-v2${path.sep}fixture`);
+    expect(fixtureCatalog).toContain(`catalog-v3${path.sep}fixture`);
     const database = new DatabaseSync(path.join(cacheRoot, fixtureCatalog!), {
       readOnly: true,
     });
     expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 2,
+      user_version: 3,
     });
     expect(
       database

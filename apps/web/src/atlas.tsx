@@ -434,6 +434,7 @@ function Context({
         materialKind !== undefined ? (
           <MaterialPanel
             documentPath={documentQuery.data.path}
+            revision={documentQuery.data.revision}
             heading={activeSection}
             materials={materials}
             selected={selectedMaterial}
@@ -470,12 +471,14 @@ function formatMaterialSize(size: number | null): string {
 
 function MaterialPanel({
   documentPath,
+  revision,
   heading,
   materials,
   selected,
   select,
 }: {
   documentPath: string;
+  revision: number;
   heading: string;
   materials: MaterialReference[];
   selected: MaterialReference | undefined;
@@ -527,19 +530,19 @@ function MaterialPanel({
               ) : selected.preview === "image" ? (
                 <img
                   className="material-preview image-preview"
-                  src={materialUrl(documentPath, selected.id)}
+                  src={materialUrl(documentPath, selected.id, revision)}
                   alt={selected.name}
                 />
               ) : selected.preview === "pdf" ? (
                 <iframe
                   className="material-preview pdf-preview"
-                  src={materialUrl(documentPath, selected.id)}
+                  src={materialUrl(documentPath, selected.id, revision)}
                   title={`${ru.pdfPreview}: ${selected.name}`}
                 />
               ) : (
                 <a
                   className="material-open"
-                  href={materialUrl(documentPath, selected.id)}
+                  href={materialUrl(documentPath, selected.id, revision)}
                   target="_blank"
                   rel="noreferrer"
                 >

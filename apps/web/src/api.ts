@@ -1,4 +1,5 @@
 export interface DocumentRepresentation {
+  revision: number;
   path: string;
   title: string;
   html: string;
@@ -98,11 +99,19 @@ export function fetchCatalog(folderPath = ""): Promise<CatalogFolder> {
   return fetchJson<CatalogFolder>(`/api/catalog${suffix}`);
 }
 
-export function materialUrl(documentPath: string, materialId: string): string {
-  return `/api/materials?${new URLSearchParams({
+export function materialUrl(
+  documentPath: string,
+  materialId: string,
+  revision?: number,
+): string {
+  const parameters = new URLSearchParams({
     document: documentPath,
     id: materialId,
-  })}`;
+  });
+  if (revision !== undefined) {
+    parameters.set("revision", String(revision));
+  }
+  return `/api/materials?${parameters}`;
 }
 
 export function fetchSearch(

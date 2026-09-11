@@ -1,4 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+const fixtureRoot = path.resolve(
+  import.meta.dirname,
+  "../../fixtures/knowledge-base",
+);
 
 test("opens the Home Document through the production origin", async ({
   page,
@@ -163,6 +170,12 @@ test("searches from the keyboard, opens a result, preserves history, and explain
   page,
 }) => {
   await page.goto("/");
+  await expect(
+    page.getByRole("heading", {
+      name: "Добро пожаловать в Индексари",
+      level: 1,
+    }),
+  ).toBeVisible();
   await page.keyboard.press("Control+k");
   const dialog = page.getByRole("dialog", { name: "Поиск Документов" });
   const input = dialog.getByPlaceholder("Поиск по Базе знаний");
@@ -226,6 +239,12 @@ test("renders adversarial highlighted snippet text without creating HTML", async
     });
   });
   await page.goto("/");
+  await expect(
+    page.getByRole("heading", {
+      name: "Добро пожаловать в Индексари",
+      level: 1,
+    }),
+  ).toBeVisible();
   await page.keyboard.press("Control+k");
   const dialog = page.getByRole("dialog", { name: "Поиск Документов" });
   await dialog.getByPlaceholder("Поиск по Базе знаний").fill("onerror");
@@ -233,4 +252,53 @@ test("renders adversarial highlighted snippet text without creating HTML", async
   await expect(dialog.locator("mark")).toHaveText("onerror");
   await expect(dialog).toContainText("<img src=x onerror=boom>");
   await expect(dialog.locator("img")).toHaveCount(0);
+});
+
+test("reflects live external Document create, update, rename, and delete", async ({
+  page,
+}) => {
+  const createdName = "Браузерное наблюдение.md";
+  const renamedName = "Браузерное переименование.md";
+  const createdPath = path.join(fixtureRoot, createdName);
+  const renamedPath = path.join(fixtureRoot, renamedName);
+
+  try {
+    await page.goto("/folders");
+    await writeFile(createdPath, "# Создано извне\n\nПервая версия.\n");
+    const createdLink = page
+      .getByRole("main")
+      .getByRole("link", { name: "Создано извне" });
+    await expect(createdLink).toBeVisible({ timeout: 2_000 });
+    await createdLink.click();
+    await expect(
+      page.getByRole("heading", { name: "Создано извне", level: 1 }),
+    ).toBeVisible();
+
+    await writeFile(createdPath, "# Обновлено извне\n\nВторая версия.\n");
+    await expect(
+      page.getByRole("heading", { name: "Обновлено извне", level: 1 }),
+    ).toBeVisible({ timeout: 2_000 });
+    await expect(page.getByRole("main")).toContainText("Вторая версия");
+
+    await rename(createdPath, renamedPath);
+    await expect(
+      page.getByRole("heading", { name: "Документ недоступен", level: 1 }),
+    ).toBeVisible({ timeout: 2_000 });
+    await page.goto("/folders");
+    const renamedLink = page
+      .getByRole("main")
+      .getByRole("link", { name: "Обновлено извне" });
+    await expect(renamedLink).toBeVisible({ timeout: 2_000 });
+    await renamedLink.click();
+
+    await rm(renamedPath);
+    await expect(
+      page.getByRole("heading", { name: "Документ недоступен", level: 1 }),
+    ).toBeVisible({ timeout: 2_000 });
+  } finally {
+    await Promise.all([
+      rm(createdPath, { force: true }),
+      rm(renamedPath, { force: true }),
+    ]);
+  }
 });

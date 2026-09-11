@@ -10,6 +10,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { Atlas } from "./atlas";
+import { LiveKnowledgeBaseChanges } from "./live-changes";
 import "./styles.css";
 
 const rootRoute = createRootRoute({ component: Outlet });
@@ -64,6 +65,7 @@ if (root === null) {
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
+      <LiveKnowledgeBaseChanges />
       <RouterProvider router={router} />
     </QueryClientProvider>
   </StrictMode>,
