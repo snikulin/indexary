@@ -1,0 +1,1056 @@
+<!doctype html>
+<!--
+  THROWAWAY PROTOTYPE — not production code.
+  Three variants of the note-view page, switchable via ?variant=, on /prototype/note-view/.
+-->
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Indexary — просмотр заметки</title>
+    <style>
+      :root {
+        --ink: #252720;
+        --muted: #77796e;
+        --faint: #a8aa9d;
+        --line: #dedfd5;
+        --soft-line: #e9e9e1;
+        --paper: #f7f6f0;
+        --card: #fffef9;
+        --moss: #5c7049;
+        --moss-dark: #3f5131;
+        --moss-soft: #e6eadf;
+        --rust: #b4603d;
+        --rust-soft: #f4e6dd;
+        --navy: #273946;
+        --shadow: 0 18px 50px rgba(42, 45, 34, 0.1);
+        --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --serif: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, serif;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        min-width: 320px;
+        color: var(--ink);
+        background: var(--paper);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      button, input { font: inherit; }
+      button { color: inherit; }
+      a { color: inherit; }
+      svg { display: block; }
+      [hidden] { display: none !important; }
+
+      .icon {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.7;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        flex: 0 0 auto;
+      }
+      .icon-sm { width: 15px; height: 15px; }
+      .wordmark {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 720;
+        letter-spacing: -0.025em;
+      }
+      .mark {
+        display: grid;
+        width: 28px;
+        height: 28px;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 9px 9px 9px 3px;
+        font-family: var(--serif);
+        font-size: 15px;
+        font-style: italic;
+      }
+      .ghost-button, .icon-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 36px;
+        padding: 0 12px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        background: transparent;
+        cursor: pointer;
+      }
+      .ghost-button:hover, .icon-button:hover { background: rgba(40, 44, 34, 0.06); }
+      .icon-button { width: 36px; padding: 0; }
+      .kbd {
+        padding: 2px 6px;
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        color: var(--muted);
+        background: rgba(255,255,255,.58);
+        font-size: 11px;
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        height: 26px;
+        padding: 0 9px;
+        border: 1px solid #dfe4d7;
+        border-radius: 99px;
+        color: var(--moss-dark);
+        background: var(--moss-soft);
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .eyebrow {
+        color: var(--moss);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: .13em;
+        text-transform: uppercase;
+      }
+      .read-only {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .read-only::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #77a65a;
+        box-shadow: 0 0 0 3px #e4eddc;
+      }
+
+      /* Shared rendered Markdown */
+      .prose { font-family: var(--serif); font-size: 18px; line-height: 1.74; }
+      .prose p { margin: 0 0 1.25em; }
+      .prose h2 {
+        margin: 2.15em 0 .7em;
+        font-family: var(--sans);
+        font-size: 22px;
+        line-height: 1.25;
+        letter-spacing: -.025em;
+      }
+      .prose h3 {
+        margin: 1.8em 0 .65em;
+        font-family: var(--sans);
+        font-size: 17px;
+        letter-spacing: -.015em;
+      }
+      .prose a {
+        color: var(--moss-dark);
+        text-decoration-color: #aab99e;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+      .prose blockquote {
+        margin: 1.7em 0;
+        padding: 3px 0 3px 22px;
+        border-left: 2px solid var(--rust);
+        color: #54564e;
+        font-size: 20px;
+        font-style: italic;
+      }
+      .prose code {
+        padding: .15em .35em;
+        border-radius: 4px;
+        background: #eeede5;
+        font-family: var(--mono);
+        font-size: .83em;
+      }
+      .prose ul { margin: .2em 0 1.5em; padding-left: 1.15em; }
+      .prose li { margin: .42em 0; padding-left: .25em; }
+      .prose li::marker { color: var(--rust); }
+      .note-title {
+        margin: 0;
+        font-family: var(--serif);
+        font-size: clamp(38px, 5vw, 62px);
+        font-weight: 500;
+        letter-spacing: -.045em;
+        line-height: 1.04;
+      }
+
+      /* Variant A — focused reader */
+      .reader-shell { min-height: 100vh; background: #f8f7f2; }
+      .reader-topbar {
+        position: sticky;
+        z-index: 10;
+        top: 0;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        height: 58px;
+        padding: 0 22px;
+        border-bottom: 1px solid rgba(48,50,42,.09);
+        background: rgba(248,247,242,.88);
+        backdrop-filter: blur(16px);
+      }
+      .reader-topbar .wordmark { font-size: 14px; }
+      .reader-crumbs { color: var(--muted); font-size: 12px; }
+      .reader-actions { display: flex; justify-content: flex-end; gap: 2px; }
+      .reader-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 730px) 220px;
+        gap: 70px;
+        width: min(1120px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 92px 0 150px;
+      }
+      .reader-head { margin-bottom: 56px; }
+      .reader-path {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 25px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .reader-path strong { color: var(--moss-dark); font-weight: 650; }
+      .reader-deck {
+        max-width: 630px;
+        margin: 22px 0 25px;
+        color: #696b62;
+        font-family: var(--serif);
+        font-size: 21px;
+        line-height: 1.5;
+      }
+      .reader-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 13px; color: var(--muted); font-size: 12px; }
+      .reader-meta .divider { width: 1px; height: 14px; background: var(--line); }
+      .reader-aside { padding-top: 168px; }
+      .aside-sticky { position: sticky; top: 90px; }
+      .mini-section { padding: 18px 0; border-top: 1px solid var(--line); }
+      .mini-section:last-child { border-bottom: 1px solid var(--line); }
+      .mini-title { margin: 0 0 12px; color: var(--muted); font-size: 11px; font-weight: 720; letter-spacing: .08em; text-transform: uppercase; }
+      .outline-link {
+        display: block;
+        padding: 5px 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+        text-decoration: none;
+      }
+      .outline-link:hover, .outline-link.active { color: var(--ink); }
+      .outline-link.active { font-weight: 650; }
+      .aside-count { margin-left: auto; color: var(--faint); }
+      .aside-row { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+      .aside-row + .aside-row { margin-top: 10px; }
+
+      /* Variant B — atlas */
+      .atlas-shell { display: grid; grid-template-columns: 270px minmax(500px, 1fr) minmax(340px, 24vw); min-height: 100vh; background: #f6f3eb; }
+      .atlas-shell.sidebar-collapsed { grid-template-columns: 58px minmax(500px, 1fr) minmax(340px, 24vw); }
+      .atlas-nav {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow: auto;
+        padding: 20px 15px;
+        border-right: 1px solid #d9d8ce;
+        background: #eeeee7;
+        transition: padding 160ms ease;
+      }
+      .atlas-nav-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px 22px 8px; }
+      .atlas-nav-head .wordmark { min-width: 0; }
+      .atlas-nav-toggle { flex: 0 0 auto; color: var(--muted); }
+      .atlas-nav-toggle:hover { color: var(--ink); }
+      .atlas-shell.sidebar-collapsed .atlas-nav { padding-right: 10px; padding-left: 10px; overflow: hidden; }
+      .atlas-shell.sidebar-collapsed .atlas-nav-head { justify-content: center; padding: 0 0 22px; }
+      .atlas-shell.sidebar-collapsed .atlas-nav-head .wordmark,
+      .atlas-shell.sidebar-collapsed .search-box,
+      .atlas-shell.sidebar-collapsed #vault-tree { display: none; }
+      .search-box {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 38px;
+        padding: 0 10px;
+        border: 1px solid #d8d8cf;
+        border-radius: 9px;
+        color: var(--muted);
+        background: rgba(255,255,255,.55);
+        font-size: 12px;
+      }
+      .search-box input {
+        min-width: 0;
+        flex: 1;
+        border: 0;
+        outline: 0;
+        color: var(--ink);
+        background: transparent;
+        font-size: 12px;
+      }
+      .search-box input::placeholder { color: var(--muted); }
+      .search-box .kbd { margin-left: auto; }
+      .tree-label { margin: 25px 9px 9px; color: #999a90; font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+      .tree-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 34px;
+        padding: 0 9px;
+        border-radius: 7px;
+        color: #686a61;
+        font-size: 13px;
+      }
+      button.tree-item { width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; }
+      .tree-item:hover { background: rgba(62,74,51,.07); }
+      .tree-item.current { color: #fff; background: var(--moss-dark); }
+      .tree-item.indent { padding-left: 27px; }
+      .tree-item.indent { min-height: 32px; font-size: 12px; }
+      .tree-item.indent span:not(.count) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .tree-item .count { margin-left: auto; color: #9a9b91; font-size: 11px; }
+      .tree-item.current .count { color: #cad2c3; }
+      .atlas-nav-footer { position: absolute; right: 15px; bottom: 22px; left: 15px; }
+      .atlas-main { min-width: 0; }
+      .atlas-toolbar {
+        position: sticky;
+        z-index: 9;
+        top: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 58px;
+        padding: 0 30px;
+        border-bottom: 1px solid rgba(55,57,48,.1);
+        background: rgba(246,243,235,.9);
+        backdrop-filter: blur(14px);
+      }
+      .atlas-toolbar-left { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+      .atlas-toolbar-actions { display: flex; align-items: center; gap: 4px; }
+      .atlas-document { width: min(720px, calc(100% - 72px)); margin: 0 auto; padding: 70px 0 150px; }
+      .atlas-document .note-title { font-size: clamp(40px, 5vw, 58px); }
+      .atlas-kicker { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
+      .atlas-facts {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        margin: 32px 0 48px;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .atlas-fact { padding: 13px 0; color: var(--muted); font-size: 11px; }
+      .atlas-fact + .atlas-fact { padding-left: 18px; border-left: 1px solid var(--line); }
+      .atlas-fact strong { display: block; margin-top: 5px; color: var(--ink); font-size: 13px; font-weight: 650; }
+      .atlas-context {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        overflow: auto;
+        padding: 0;
+        border-left: 1px solid #d9d8ce;
+        background: #f0eee6;
+      }
+      .context-header { position: sticky; z-index: 3; top: 0; display: flex; align-items: center; justify-content: space-between; height: 58px; padding: 0 18px; border-bottom: 1px solid #d9d8ce; background: rgba(240,238,230,.94); backdrop-filter: blur(14px); }
+      .context-header h2 { margin: 0; font-size: 13px; }
+      .context-tabs { display: flex; gap: 3px; }
+      .context-tab { height: 30px; padding: 0 9px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; font-size: 11px; }
+      .context-tab:hover { background: rgba(255,255,255,.55); }
+      .context-tab.active { color: var(--ink); background: #fffef9; box-shadow: 0 1px 4px rgba(35,39,29,.09); }
+      .context-body { padding: 16px 18px 90px; }
+      .context-card {
+        display: block;
+        margin-bottom: 8px;
+        padding: 13px;
+        border: 1px solid #deddd3;
+        border-radius: 10px;
+        background: rgba(255,255,255,.5);
+        text-decoration: none;
+      }
+      .context-card:hover { border-color: #bec6b5; background: rgba(255,255,255,.85); }
+      .context-card .from { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--moss-dark); font-size: 11px; font-weight: 700; }
+      .context-card p { margin: 0; color: #64665e; font-family: var(--serif); font-size: 13px; line-height: 1.45; }
+      .context-card mark { color: inherit; background: #e7dfb9; }
+      .context-group-title { margin: 24px 0 10px; color: #8f9087; font-size: 10px; font-weight: 750; letter-spacing: .11em; text-transform: uppercase; }
+      .attachment { display: flex; align-items: center; gap: 10px; padding: 9px 5px; border-bottom: 1px solid #deddd4; font-size: 12px; }
+      .attachment-type { display: grid; width: 31px; height: 35px; place-items: center; border-radius: 5px; color: #8d553f; background: var(--rust-soft); font-size: 9px; font-weight: 800; }
+      .attachment small { display: block; margin-top: 3px; color: var(--muted); }
+      .original-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+      .original-toolbar strong { min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .original-toolbar a { flex: 0 0 auto; color: var(--moss-dark); font-size: 11px; font-weight: 700; text-decoration: none; }
+      .original-frame { display: grid; min-height: 430px; place-items: center; border: 1px solid #d7d6cc; border-radius: 11px; overflow: hidden; background: #d9d9d3; box-shadow: 0 10px 28px rgba(49,50,43,.1); }
+      .original-frame img { display: block; width: 100%; height: auto; max-height: calc(100vh - 190px); object-fit: contain; }
+      .original-frame iframe { width: 100%; height: calc(100vh - 150px); min-height: 540px; border: 0; background: #fff; }
+      .original-empty { padding: 50px 25px; color: var(--muted); font-family: var(--serif); font-size: 15px; line-height: 1.5; text-align: center; }
+      .original-list { display: flex; gap: 7px; margin-top: 10px; overflow: auto; padding-bottom: 4px; }
+      .original-chip { display: flex; min-width: 0; align-items: center; gap: 7px; height: 35px; padding: 0 9px; border: 1px solid #d5d6cd; border-radius: 8px; color: var(--muted); background: rgba(255,255,255,.45); cursor: pointer; font-size: 10px; }
+      .original-chip.active { border-color: #91a184; color: var(--moss-dark); background: var(--moss-soft); }
+      .property-grid { margin: 0; }
+      .property-grid .property-row { grid-template-columns: minmax(85px, .42fr) 1fr; border-color: #dddcd3; }
+      .property-grid .property-row dt { color: #8d8f85; }
+      .property-grid .property-row dd { color: #4b4e47; font-family: var(--mono); font-size: 10px; line-height: 1.55; }
+      .vault-summary { margin: 15px 8px 0; padding: 11px; border: 1px solid #dcdcd3; border-radius: 9px; color: #85877e; background: rgba(255,255,255,.35); font-size: 10px; line-height: 1.55; }
+      .vault-summary strong { color: var(--ink); }
+      .atlas-loading { padding: 90px 0; color: var(--muted); font-family: var(--serif); font-size: 18px; text-align: center; }
+      .source-badge { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 99px; color: #7c4d39; background: var(--rust-soft); font-size: 11px; font-weight: 700; }
+
+      /* Variant C — workbench */
+      .workbench-shell { min-height: 100vh; padding: 18px; color: #e9ede5; background: #172027; }
+      .workbench-frame { min-height: calc(100vh - 36px); border: 1px solid #34424a; border-radius: 17px; overflow: hidden; background: #1d282e; box-shadow: 0 25px 70px rgba(0,0,0,.28); }
+      .workbench-top {
+        display: flex;
+        align-items: center;
+        height: 58px;
+        padding: 0 20px;
+        border-bottom: 1px solid #344149;
+        background: #202c32;
+      }
+      .workbench-top .wordmark { min-width: 240px; }
+      .workbench-locator { display: flex; align-items: center; gap: 8px; color: #9faeaa; font-size: 12px; }
+      .workbench-locator strong { color: #e5ebe5; }
+      .workbench-top-actions { display: flex; margin-left: auto; gap: 3px; }
+      .workbench-top .icon-button:hover { background: #2d3a40; }
+      .workbench-grid { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: calc(100vh - 96px); }
+      .workbench-rail { padding: 17px 12px; border-right: 1px solid #344149; background: #1a252b; }
+      .rail-action {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        width: 100%;
+        height: 36px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: 7px;
+        color: #9facaa;
+        background: transparent;
+        cursor: pointer;
+        font-size: 12px;
+        text-align: left;
+      }
+      .rail-action:hover { color: #f0f2ed; background: #27343a; }
+      .rail-action.active { color: #fff; background: #33443f; }
+      .rail-action .count { margin-left: auto; color: #71817e; font: 10px var(--mono); }
+      .rail-label { margin: 23px 10px 8px; color: #667670; font-size: 9px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+      .rail-rule { height: 1px; margin: 15px 9px; background: #2f3b41; }
+      .rail-path { padding: 0 10px; color: #71807c; font: 10px/1.55 var(--mono); overflow-wrap: anywhere; }
+      .workbench-content { min-width: 0; background: #dfe1dc; }
+      .workbench-tabs { display: flex; align-items: flex-end; height: 43px; padding: 0 15px; border-bottom: 1px solid #bfc4bf; background: #cfd3ce; }
+      .file-tab {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 34px;
+        padding: 0 13px;
+        border: 1px solid #bbc1bc;
+        border-bottom: 0;
+        border-radius: 7px 7px 0 0;
+        color: #66706a;
+        background: #c7ccc7;
+        font-size: 11px;
+      }
+      .file-tab.active { height: 36px; color: #303935; background: #f8f8f4; }
+      .workbench-document-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; min-height: calc(100vh - 139px); color: var(--ink); background: #f8f8f4; }
+      .workbench-paper { padding: 56px clamp(32px, 7vw, 100px) 130px; }
+      .workbench-paper-inner { max-width: 740px; }
+      .workbench-paper .note-title { font-family: var(--sans); font-size: clamp(38px, 4vw, 54px); font-weight: 710; }
+      .workbench-paper .prose { font-size: 17px; }
+      .workbench-paper .prose h2 { padding-top: 20px; border-top: 1px solid #e0e2dd; }
+      .workbench-status { display: flex; flex-wrap: wrap; gap: 14px; margin: 22px 0 42px; color: var(--muted); font: 11px var(--mono); }
+      .workbench-inspector { border-left: 1px solid #d8dbd6; background: #eeefea; }
+      .inspector-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid #d3d6d1; }
+      .inspector-tab { padding: 14px 5px 11px; border: 0; border-bottom: 2px solid transparent; color: #7e8882; background: transparent; font-size: 10px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; }
+      .inspector-tab.active { border-bottom-color: var(--rust); color: #333c37; }
+      .inspector-body { padding: 20px; }
+      .property-row { display: grid; grid-template-columns: 90px 1fr; gap: 10px; padding: 9px 0; border-bottom: 1px solid #dcdfda; font-size: 11px; }
+      .property-row dt { color: #8a928d; }
+      .property-row dd { margin: 0; color: #3f4944; font-family: var(--mono); overflow-wrap: anywhere; }
+      .graph-box { position: relative; height: 185px; margin-top: 28px; border: 1px solid #d6dad5; border-radius: 9px; overflow: hidden; background: #e6e8e3; }
+      .graph-box::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        opacity: .35;
+        background-image: radial-gradient(#aab1aa 1px, transparent 1px);
+        background-size: 14px 14px;
+      }
+      .graph-line { position: absolute; z-index: 1; height: 1px; background: #a5aea5; transform-origin: left; }
+      .graph-node { position: absolute; z-index: 2; display: grid; place-items: center; border: 2px solid #eef0eb; border-radius: 50%; background: var(--moss); box-shadow: 0 2px 7px rgba(0,0,0,.14); }
+      .graph-node.main { width: 20px; height: 20px; background: var(--rust); }
+      .graph-node.small { width: 12px; height: 12px; }
+      .graph-caption { position: absolute; z-index: 3; color: #59635d; font-size: 9px; white-space: nowrap; }
+
+      /* Prototype switcher */
+      .prototype-switcher {
+        position: fixed;
+        z-index: 100;
+        right: 50%;
+        bottom: 18px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        min-width: 290px;
+        padding: 6px;
+        border: 1px solid rgba(255,255,255,.15);
+        border-radius: 15px;
+        color: #f4f5ef;
+        background: #1f2521;
+        box-shadow: 0 14px 36px rgba(0,0,0,.27);
+        transform: translateX(50%);
+      }
+      .switch-arrow {
+        display: grid;
+        width: 38px;
+        height: 36px;
+        place-items: center;
+        border: 0;
+        border-radius: 9px;
+        color: #d9ded5;
+        background: transparent;
+        cursor: pointer;
+      }
+      .switch-arrow:hover { background: #343c36; }
+      .switch-label { flex: 1; text-align: center; }
+      .switch-label strong { display: block; font-size: 12px; }
+      .switch-label span { display: block; margin-top: 2px; color: #99a49b; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+
+      @media (max-width: 1180px) {
+        .atlas-shell { grid-template-columns: 220px minmax(460px, 1fr); }
+        .atlas-context { display: none; }
+        .workbench-document-grid { grid-template-columns: minmax(0, 1fr) 280px; }
+      }
+      @media (max-width: 820px) {
+        .reader-topbar { grid-template-columns: 1fr auto; }
+        .reader-crumbs { display: none; }
+        .reader-layout { display: block; width: min(650px, calc(100% - 38px)); padding-top: 60px; }
+        .reader-aside { display: none; }
+        .atlas-shell { display: block; }
+        .atlas-nav { display: none; }
+        .atlas-document { width: min(650px, calc(100% - 38px)); padding-top: 52px; }
+        .workbench-shell { padding: 0; }
+        .workbench-frame { min-height: 100vh; border: 0; border-radius: 0; }
+        .workbench-grid { display: block; }
+        .workbench-rail, .workbench-inspector { display: none; }
+        .workbench-document-grid { display: block; }
+        .workbench-paper { padding: 40px 24px 130px; }
+      }
+      @media (max-width: 520px) {
+        .reader-topbar { padding: 0 10px; }
+        .reader-topbar .wordmark span:last-child { display: none; }
+        .note-title { font-size: 39px; }
+        .reader-deck { font-size: 18px; }
+        .prose { font-size: 17px; }
+        .atlas-toolbar { padding: 0 12px; }
+        .atlas-toolbar-left span { display: none; }
+        .atlas-facts { grid-template-columns: 1fr; }
+        .atlas-fact + .atlas-fact { padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
+        .workbench-top .wordmark { min-width: auto; }
+        .workbench-locator { display: none; }
+        .prototype-switcher { bottom: 10px; min-width: min(290px, calc(100% - 20px)); }
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position:absolute">
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+      <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l2-2a5 5 0 0 0-7.07-7.07l-1.15 1.15"/><path d="M14 11a5 5 0 0 0-7.54-.54l-2 2a5 5 0 0 0 7.07 7.07l1.15-1.15"/></symbol>
+      <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-pin" viewBox="0 0 24 24"><path d="m12 17 5-5a7 7 0 1 0-10 0z"/><circle cx="12" cy="8" r="2"/><path d="M12 17v5"/></symbol>
+      <symbol id="i-hash" viewBox="0 0 24 24"><path d="M10 3 8 21M16 3l-2 18M4 9h16M3 15h16"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+    </svg>
+
+    <main id="app"></main>
+    <div class="prototype-switcher" aria-label="Переключатель вариантов прототипа">
+      <button class="switch-arrow" id="previous" aria-label="Предыдущий вариант"><svg class="icon"><use href="#i-arrow-left"/></svg></button>
+      <div class="switch-label"><strong id="variant-label"></strong><span>← / → чтобы сравнить</span></div>
+      <button class="switch-arrow" id="next" aria-label="Следующий вариант"><svg class="icon"><use href="#i-arrow-right"/></svg></button>
+    </div>
+
+    <template id="article-content">
+      <p>Когда заметок становится много, папки перестают быть картой знаний. Они показывают, <em>где лежит файл</em>, но почти ничего не говорят о том, почему он важен и с чем связан.</p>
+      <p>Полезная система должна сохранять простоту файлов и одновременно давать несколько способов вернуться к мысли: через поиск, прямую ссылку, соседний документ или неожиданную обратную связь.</p>
+      <h2 id="principles">Принципы</h2>
+      <p>У хорошей заметки есть адрес, контекст и след происхождения. Адрес помогает найти её снова. Контекст объясняет место среди других идей. След происхождения позволяет доверять содержанию.</p>
+      <blockquote>Структура должна появляться из использования, а не предшествовать ему.</blockquote>
+      <p>Поэтому исходный Markdown остаётся источником истины. Индекс можно удалить и собрать заново; ссылки и свойства документа продолжат жить в обычном тексте.</p>
+      <h2 id="layers">Три слоя навигации</h2>
+      <ul>
+        <li><strong>Папки</strong> дают устойчивую, понятную иерархию.</li>
+        <li><strong>Ссылки</strong> проявляют смысловые отношения между заметками.</li>
+        <li><strong>Поиск</strong> помогает, когда место и точная формулировка забыты.</li>
+      </ul>
+      <p>Ни один слой не обязан быть главным. Вместе они образуют несколько маршрутов к одной мысли — как улицы, тропинки и ориентиры на карте.</p>
+      <h2 id="open-question">Открытый вопрос</h2>
+      <p>Нужно проверить, когда обратные ссылки полезнее показывать рядом с текстом, а когда — оставлять в конце. Это зависит от того, читает ли человек последовательно или собирает контекст вокруг темы.</p>
+      <p>См. также: <a href="#">Локальные инструменты мышления</a> и <a href="#">Поиск как способ навигации</a>.</p>
+    </template>
+
+    <script>
+      const icon = (name, extra = '') => `<svg class="icon ${extra}"><use href="#i-${name}"/></svg>`;
+      const article = () => document.querySelector('#article-content').innerHTML;
+      const sharedTitle = 'Как устроить личную базу знаний';
+
+      function VariantA() {
+        return `
+          <section class="reader-shell" data-variant="A">
+            <header class="reader-topbar">
+              <div class="wordmark"><span class="mark">I</span><span>Indexary</span></div>
+              <div class="reader-crumbs">Исследования / Системы знаний</div>
+              <div class="reader-actions">
+                <button class="icon-button" aria-label="Поиск">${icon('search')}</button>
+                <button class="icon-button" aria-label="Скопировать ссылку">${icon('link')}</button>
+                <button class="icon-button" aria-label="Ещё">${icon('more')}</button>
+              </div>
+            </header>
+            <div class="reader-layout">
+              <article>
+                <header class="reader-head">
+                  <div class="reader-path">Заметки <span>/</span> <strong>Исследования</strong></div>
+                  <h1 class="note-title">${sharedTitle}</h1>
+                  <p class="reader-deck">Черновая модель навигации по знаниям, в которой файлы остаются фундаментом, а связи помогают находить дорогу.</p>
+                  <div class="reader-meta">
+                    <span class="read-only">Синхронизировано</span><span class="divider"></span><span>Обновлено 8 сентября</span><span>7 мин чтения</span>
+                  </div>
+                  <div style="display:flex;gap:7px;margin-top:22px"><span class="tag">#knowledge-management</span><span class="tag">#navigation</span></div>
+                </header>
+                <div class="prose">${article()}</div>
+              </article>
+              <aside class="reader-aside">
+                <div class="aside-sticky">
+                  <section class="mini-section">
+                    <h2 class="mini-title">В этой заметке</h2>
+                    <a class="outline-link active" href="#principles">Принципы</a>
+                    <a class="outline-link" href="#layers">Три слоя навигации</a>
+                    <a class="outline-link" href="#open-question">Открытый вопрос</a>
+                  </section>
+                  <section class="mini-section">
+                    <h2 class="mini-title">Контекст</h2>
+                    <div class="aside-row">${icon('link', 'icon-sm')} Обратные ссылки <span class="aside-count">4</span></div>
+                    <div class="aside-row">${icon('file', 'icon-sm')} Вложения <span class="aside-count">2</span></div>
+                  </section>
+                  <section class="mini-section">
+                    <h2 class="mini-title">Источник</h2>
+                    <div class="aside-row" style="align-items:flex-start;font-family:var(--mono);font-size:10px;line-height:1.55">notes/research/<br>knowledge-systems.md</div>
+                  </section>
+                </div>
+              </aside>
+            </div>
+          </section>`;
+      }
+
+      function VariantB() {
+        return `
+          <section class="atlas-shell" data-variant="B">
+            <nav class="atlas-nav">
+              <div class="atlas-nav-head">
+                <div class="wordmark"><span class="mark">I</span><span>Indexary</span></div>
+                <button class="icon-button atlas-nav-toggle" id="atlas-nav-toggle" aria-label="Свернуть боковую панель" title="Свернуть боковую панель">${icon('panel')}</button>
+              </div>
+              <label class="search-box">${icon('search', 'icon-sm')}<input id="vault-search" type="search" placeholder="Найти в базе" autocomplete="off"><span class="kbd">⌘ K</span></label>
+              <div id="vault-tree"><div class="atlas-loading" style="padding:45px 0">Читаю структуру…</div></div>
+            </nav>
+            <main class="atlas-main">
+              <header class="atlas-toolbar">
+                <div class="atlas-toolbar-left" id="atlas-breadcrumbs">Локальная база знаний</div>
+                <div class="atlas-toolbar-actions">
+                  <span class="read-only" style="margin-right:9px">Только чтение</span>
+                  <button class="icon-button" aria-label="Скопировать ссылку">${icon('link')}</button>
+                  <button class="icon-button" aria-label="Ещё">${icon('more')}</button>
+                </div>
+              </header>
+              <article class="atlas-document" id="atlas-document"><div class="atlas-loading">Открываю заметку из vault…</div></article>
+            </main>
+            <aside class="atlas-context">
+              <div class="context-header">
+                <h2>Материалы</h2>
+                <div class="context-tabs">
+                  <button class="context-tab active" data-context-tab="original">Оригинал</button>
+                  <button class="context-tab" data-context-tab="links">Связи</button>
+                  <button class="context-tab" data-context-tab="properties">Поля</button>
+                </div>
+              </div>
+              <div class="context-body" id="atlas-context"><div class="atlas-loading" style="padding:45px 0">Ищу оригинал…</div></div>
+            </aside>
+          </section>`;
+      }
+
+      function VariantC() {
+        return `
+          <section class="workbench-shell" data-variant="C">
+            <div class="workbench-frame">
+              <header class="workbench-top">
+                <div class="wordmark"><span class="mark">I</span><span>Indexary</span></div>
+                <div class="workbench-locator">notes / research / <strong>knowledge-systems.md</strong></div>
+                <div class="workbench-top-actions">
+                  <button class="icon-button" aria-label="Поиск">${icon('search')}</button>
+                  <button class="icon-button" aria-label="Копировать путь">${icon('copy')}</button>
+                  <button class="icon-button" aria-label="Ещё">${icon('more')}</button>
+                </div>
+              </header>
+              <div class="workbench-grid">
+                <nav class="workbench-rail">
+                  <button class="rail-action">${icon('search', 'icon-sm')} Быстрый поиск <span class="count">⌘K</span></button>
+                  <button class="rail-action active">${icon('file', 'icon-sm')} Документ</button>
+                  <button class="rail-action">${icon('link', 'icon-sm')} Связи <span class="count">04</span></button>
+                  <button class="rail-action">${icon('panel', 'icon-sm')} Свойства <span class="count">08</span></button>
+                  <div class="rail-rule"></div>
+                  <div class="rail-label">Оглавление</div>
+                  <a class="rail-action" href="#principles-c">01&nbsp; Принципы</a>
+                  <a class="rail-action" href="#layers-c">02&nbsp; Три слоя</a>
+                  <a class="rail-action" href="#open-c">03&nbsp; Открытый вопрос</a>
+                  <div class="rail-label">Файл на диске</div>
+                  <div class="rail-path">/knowledge-base/notes/research/knowledge-systems.md</div>
+                </nav>
+                <main class="workbench-content">
+                  <div class="workbench-tabs"><div class="file-tab active">${icon('file', 'icon-sm')} knowledge-systems.md <span style="color:#97a09a">×</span></div></div>
+                  <div class="workbench-document-grid">
+                    <article class="workbench-paper">
+                      <div class="workbench-paper-inner">
+                        <div class="eyebrow">Исследования / Системы знаний</div>
+                        <h1 class="note-title" style="margin-top:16px">${sharedTitle}</h1>
+                        <div class="workbench-status"><span>STATUS: SYNCED</span><span>UPDATED: 2026-09-08 19:42</span><span>READ: 7 MIN</span></div>
+                        <div class="prose" id="workbench-prose">${article()}</div>
+                      </div>
+                    </article>
+                    <aside class="workbench-inspector">
+                      <div class="inspector-tabs"><button class="inspector-tab active">Свойства</button><button class="inspector-tab">Связи</button><button class="inspector-tab">Файл</button></div>
+                      <div class="inspector-body">
+                        <div class="eyebrow">Frontmatter</div>
+                        <dl style="margin:10px 0 0">
+                          <div class="property-row"><dt>title</dt><dd>Как устроить личную базу знаний</dd></div>
+                          <div class="property-row"><dt>status</dt><dd>evergreen</dd></div>
+                          <div class="property-row"><dt>created</dt><dd>2026-08-14</dd></div>
+                          <div class="property-row"><dt>modified</dt><dd>2026-09-08</dd></div>
+                          <div class="property-row"><dt>tags</dt><dd>[knowledge-management, navigation]</dd></div>
+                        </dl>
+                        <div class="eyebrow" style="margin-top:28px">Локальный граф</div>
+                        <div class="graph-box">
+                          <span class="graph-line" style="left:52%;top:47%;width:78px;transform:rotate(-30deg)"></span>
+                          <span class="graph-line" style="left:50%;top:48%;width:95px;transform:rotate(151deg)"></span>
+                          <span class="graph-line" style="left:49%;top:50%;width:69px;transform:rotate(55deg)"></span>
+                          <span class="graph-line" style="left:48%;top:48%;width:75px;transform:rotate(220deg)"></span>
+                          <span class="graph-node main" style="left:48%;top:43%"></span>
+                          <span class="graph-node small" style="left:73%;top:27%"></span>
+                          <span class="graph-node small" style="left:18%;top:68%"></span>
+                          <span class="graph-node small" style="left:65%;top:73%"></span>
+                          <span class="graph-node small" style="left:26%;top:21%"></span>
+                          <span class="graph-caption" style="left:56%;top:37%">эта заметка</span>
+                          <span class="graph-caption" style="left:68%;top:16%">дизайн</span>
+                          <span class="graph-caption" style="left:9%;top:79%">поиск</span>
+                        </div>
+                      </div>
+                    </aside>
+                  </div>
+                </main>
+              </div>
+            </div>
+          </section>`;
+      }
+
+      let vaultIndex = null;
+      let activeNote = null;
+      let contextMode = 'original';
+      let originalIndex = 0;
+
+      function escapeHtml(value = '') {
+        return String(value).replace(/[&<>"']/g, (character) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+        })[character]);
+      }
+
+      function inlineMarkdown(value) {
+        return escapeHtml(value)
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+          .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => `<a href="#" data-wikilink="${escapeHtml(target)}">${escapeHtml(label || target.split('/').pop())}</a>`)
+          .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+      }
+
+      function markdownToHtml(markdown) {
+        const lines = markdown.replace(/^#\s+.*(?:\n|$)/, '').split('\n');
+        let html = '';
+        let list = '';
+        let paragraph = [];
+        let inCode = false;
+        let code = [];
+
+        const closeList = () => {
+          if (list) html += `</${list}>`;
+          list = '';
+        };
+        const flushParagraph = () => {
+          if (paragraph.length) html += `<p>${inlineMarkdown(paragraph.join(' '))}</p>`;
+          paragraph = [];
+        };
+
+        for (const line of lines) {
+          if (line.startsWith('```')) {
+            flushParagraph(); closeList();
+            if (inCode) {
+              html += `<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`;
+              code = [];
+            }
+            inCode = !inCode;
+            continue;
+          }
+          if (inCode) { code.push(line); continue; }
+          if (!line.trim()) { flushParagraph(); closeList(); continue; }
+
+          const heading = line.match(/^(#{2,4})\s+(.+)$/);
+          if (heading) {
+            flushParagraph(); closeList();
+            const level = heading[1].length;
+            html += `<h${level}>${inlineMarkdown(heading[2])}</h${level}>`;
+            continue;
+          }
+          if (line.startsWith('> ')) {
+            flushParagraph(); closeList();
+            html += `<blockquote>${inlineMarkdown(line.slice(2))}</blockquote>`;
+            continue;
+          }
+          const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+          const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+          if (bullet || numbered) {
+            flushParagraph();
+            const nextList = numbered ? 'ol' : 'ul';
+            if (list !== nextList) { closeList(); html += `<${nextList}>`; list = nextList; }
+            html += `<li>${inlineMarkdown((bullet || numbered)[1])}</li>`;
+            continue;
+          }
+          paragraph.push(line.trim());
+        }
+        flushParagraph(); closeList();
+        if (inCode && code.length) html += `<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`;
+        return html;
+      }
+
+      function formatBytes(bytes) {
+        if (!bytes) return '0 Б';
+        const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+        const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+        return `${(bytes / (1024 ** power)).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ${units[power]}`;
+      }
+
+      function formatDate(value) {
+        const date = new Date(value);
+        return Number.isNaN(date.valueOf()) ? value : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
+      }
+
+      function topSection(path) {
+        return path.includes('/') ? path.split('/')[0] : 'Корень';
+      }
+
+      function renderVaultTree(query = '') {
+        const container = document.querySelector('#vault-tree');
+        if (!container || !vaultIndex) return;
+        const normalized = query.trim().toLocaleLowerCase('ru-RU');
+        const selectedPath = activeNote?.path || new URLSearchParams(location.search).get('note') || vaultIndex.default_note;
+        const selectedSection = topSection(selectedPath || '');
+
+        if (normalized) {
+          const matches = vaultIndex.notes.filter((note) => `${note.title} ${note.path}`.toLocaleLowerCase('ru-RU').includes(normalized)).slice(0, 24);
+          container.innerHTML = `<div class="tree-label">Найдено · ${matches.length}</div>${matches.map((note) => `
+            <button class="tree-item indent ${note.path === selectedPath ? 'current' : ''}" data-note-path="${escapeHtml(note.path)}">
+              ${icon(note.original_count ? 'link' : 'file', 'icon-sm')}<span>${escapeHtml(note.title)}</span>${note.original_kind ? `<span class="count">${escapeHtml(note.original_kind.toUpperCase())}</span>` : ''}
+            </button>`).join('') || '<div class="vault-summary">Ничего не найдено</div>'}`;
+          bindTreeActions();
+          return;
+        }
+
+        const sections = vaultIndex.sections.map((section) => `
+          <button class="tree-item ${section.name === selectedSection ? 'current' : ''}" data-section="${escapeHtml(section.name)}">
+            ${icon('folder', 'icon-sm')}<span>${escapeHtml(section.name)}</span><span class="count">${section.count}</span>
+          </button>`).join('');
+        const sectionNotes = vaultIndex.notes.filter((note) => note.section === selectedSection).slice(0, 18);
+        const notes = sectionNotes.map((note) => `
+          <button class="tree-item indent ${note.path === selectedPath ? 'current' : ''}" data-note-path="${escapeHtml(note.path)}" title="${escapeHtml(note.title)}">
+            ${icon('file', 'icon-sm')}<span>${escapeHtml(note.title)}</span>${note.original_kind ? `<span class="count">${escapeHtml(note.original_kind.toUpperCase())}</span>` : ''}
+          </button>`).join('');
+        container.innerHTML = `
+          <div class="tree-label">База знаний</div>${sections}
+          <div class="tree-label">${escapeHtml(selectedSection)}</div>${notes}
+          <div class="vault-summary"><strong>${vaultIndex.stats.notes}</strong> заметок · <strong>${vaultIndex.stats.with_original}</strong> с оригиналами<br>Данные читаются прямо из локального vault.</div>`;
+        bindTreeActions();
+      }
+
+      function bindTreeActions() {
+        document.querySelectorAll('[data-note-path]').forEach((button) => {
+          button.addEventListener('click', () => loadVaultNote(button.dataset.notePath));
+        });
+        document.querySelectorAll('[data-section]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const first = vaultIndex.notes.find((note) => note.section === button.dataset.section);
+            if (first) loadVaultNote(first.path);
+          });
+        });
+      }
+
+      function renderAtlasDocument(note) {
+        const folderParts = note.folder === 'Корень' ? [] : note.folder.split('/');
+        document.querySelector('#atlas-breadcrumbs').innerHTML = `${folderParts.map((part) => escapeHtml(part)).join(' <span>›</span> ')}${folderParts.length ? ' <span>›</span> ' : ''}<strong style="color:var(--ink)">${escapeHtml(note.title)}</strong>`;
+        const metadataTags = [];
+        if (note.type && note.type !== 'note') metadataTags.push(`<span class="tag">${escapeHtml(note.type)}</span>`);
+        if (note.privacy && note.privacy !== '—') metadataTags.push(`<span class="tag">${escapeHtml(note.privacy)}</span>`);
+        if (note.originals.length) metadataTags.push(`<span class="source-badge">${icon('file', 'icon-sm')} ${note.originals.length === 1 ? 'Есть оригинал' : `Оригиналов: ${note.originals.length}`}</span>`);
+        document.querySelector('#atlas-document').innerHTML = `
+          <div class="atlas-kicker">${metadataTags.join('')}</div>
+          <h1 class="note-title">${escapeHtml(note.title)}</h1>
+          <div class="atlas-facts">
+            <div class="atlas-fact">Раздел<strong>${escapeHtml(topSection(note.path))}</strong></div>
+            <div class="atlas-fact">Изменена<strong>${escapeHtml(formatDate(note.modified))}</strong></div>
+          </div>
+          <div class="prose">${markdownToHtml(note.body)}</div>`;
+      }
+
+      function renderContext(mode = contextMode) {
+        if (!activeNote) return;
+        contextMode = mode;
+        document.querySelectorAll('[data-context-tab]').forEach((button) => button.classList.toggle('active', button.dataset.contextTab === mode));
+        const container = document.querySelector('#atlas-context');
+
+        if (mode === 'original') {
+          const originals = activeNote.originals;
+          if (!originals.length) {
+            container.innerHTML = `<div class="original-empty">У этой заметки нет первичного файла.<br><br>Текст Markdown и есть оригинал.</div>`;
+            return;
+          }
+          originalIndex = Math.min(originalIndex, originals.length - 1);
+          const original = originals[originalIndex];
+          if (original.missing) {
+            container.innerHTML = `<div class="original-empty">Оригинал указан в frontmatter, но файл сейчас недоступен.<br><br><code>${escapeHtml(original.path)}</code></div>`;
+            return;
+          }
+          const preview = original.mime === 'application/pdf'
+            ? `<iframe src="${escapeHtml(original.url)}#toolbar=0&navpanes=0" title="${escapeHtml(original.name)}"></iframe>`
+            : original.mime.startsWith('image/')
+              ? `<img src="${escapeHtml(original.url)}" alt="${escapeHtml(original.name)}">`
+              : `<div class="original-empty">Предпросмотр для ${escapeHtml(original.extension.toUpperCase())} пока не поддерживается.</div>`;
+          container.innerHTML = `
+            <div class="original-toolbar"><strong title="${escapeHtml(original.name)}">${escapeHtml(original.name)}</strong><a href="${escapeHtml(original.url)}" target="_blank">Открыть ↗</a></div>
+            <div class="original-frame">${preview}</div>
+            <div class="original-list">${originals.map((item, index) => `<button class="original-chip ${index === originalIndex ? 'active' : ''}" data-original-index="${index}"><span class="attachment-type">${escapeHtml((item.extension || '?').toUpperCase())}</span><span>${index + 1} · ${item.size ? formatBytes(item.size) : 'нет файла'}</span></button>`).join('')}</div>`;
+          document.querySelectorAll('[data-original-index]').forEach((button) => button.addEventListener('click', () => { originalIndex = Number(button.dataset.originalIndex); renderContext('original'); }));
+          return;
+        }
+
+        if (mode === 'links') {
+          const backlinks = activeNote.backlinks.map((link) => `<button class="context-card" style="width:100%;text-align:left;cursor:pointer" data-note-path="${escapeHtml(link.path)}"><span class="from">${icon('link', 'icon-sm')} ${escapeHtml(link.title)}</span><p>${escapeHtml(link.snippet)}</p></button>`).join('');
+          const outbound = activeNote.links.map((link) => `<div class="attachment">${icon('arrow-right', 'icon-sm')}<span>${escapeHtml(link.label)}<small>${escapeHtml(link.target)}</small></span></div>`).join('');
+          container.innerHTML = `
+            <div class="context-group-title">Обратные ссылки · ${activeNote.backlinks.length}</div>${backlinks || '<div class="original-empty" style="padding:22px">Упоминаний пока нет</div>'}
+            <div class="context-group-title">Исходящие ссылки · ${activeNote.links.length}</div>${outbound || '<div class="original-empty" style="padding:22px">Ссылок пока нет</div>'}`;
+          bindTreeActions();
+          return;
+        }
+
+        const rows = Object.entries(activeNote.metadata).filter(([key]) => key !== 'originals').map(([key, value]) => `
+          <div class="property-row"><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(Array.isArray(value) ? value.join(', ') : value)}</dd></div>`).join('');
+        container.innerHTML = `<div class="context-group-title">Frontmatter · ${Object.keys(activeNote.metadata).length}</div><dl class="property-grid">${rows || '<div class="original-empty">Frontmatter отсутствует</div>'}</dl>`;
+      }
+
+      async function loadVaultNote(path) {
+        const documentPanel = document.querySelector('#atlas-document');
+        if (!documentPanel) return;
+        documentPanel.innerHTML = '<div class="atlas-loading">Открываю заметку из vault…</div>';
+        try {
+          const response = await fetch(`/api/note?path=${encodeURIComponent(path)}`);
+          if (!response.ok) throw new Error('Не удалось прочитать заметку');
+          activeNote = await response.json();
+          originalIndex = 0;
+          const url = new URL(location.href);
+          url.searchParams.set('variant', 'B');
+          url.searchParams.set('note', activeNote.path);
+          history.replaceState({}, '', url);
+          renderVaultTree(document.querySelector('#vault-search')?.value || '');
+          renderAtlasDocument(activeNote);
+          renderContext(activeNote.originals.length ? 'original' : 'links');
+          window.scrollTo({ top: 0, behavior: 'instant' });
+        } catch (error) {
+          documentPanel.innerHTML = `<div class="atlas-loading">${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      async function hydrateVault() {
+        try {
+          const response = await fetch('/api/index');
+          if (!response.ok) throw new Error('Сервер vault недоступен');
+          vaultIndex = await response.json();
+          const requested = new URLSearchParams(location.search).get('note');
+          const path = vaultIndex.notes.some((note) => note.path === requested) ? requested : vaultIndex.default_note;
+          renderVaultTree();
+          if (path) await loadVaultNote(path);
+          const search = document.querySelector('#vault-search');
+          search.addEventListener('input', () => renderVaultTree(search.value));
+          search.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter') return;
+            const first = document.querySelector('[data-note-path]');
+            if (first) loadVaultNote(first.dataset.notePath);
+          });
+          document.querySelectorAll('[data-context-tab]').forEach((button) => button.addEventListener('click', () => renderContext(button.dataset.contextTab)));
+          document.querySelector('#atlas-nav-toggle').addEventListener('click', toggleAtlasSidebar);
+        } catch (error) {
+          document.querySelector('#vault-tree').innerHTML = `<div class="vault-summary">${escapeHtml(error.message)}. Запустите прототип через <code>serve.sh</code>.</div>`;
+          document.querySelector('#atlas-document').innerHTML = `<div class="atlas-loading">${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      function toggleAtlasSidebar() {
+        const shell = document.querySelector('.atlas-shell');
+        const button = document.querySelector('#atlas-nav-toggle');
+        if (!shell || !button) return;
+        const collapsed = shell.classList.toggle('sidebar-collapsed');
+        button.setAttribute('aria-label', collapsed ? 'Раскрыть боковую панель' : 'Свернуть боковую панель');
+        button.setAttribute('title', collapsed ? 'Раскрыть боковую панель' : 'Свернуть боковую панель');
+      }
+
+      const variants = [
+        { key: 'A', name: 'Тихое чтение', render: VariantA },
+        { key: 'B', name: 'Атлас связей', render: VariantB },
+        { key: 'C', name: 'Рабочий стол', render: VariantC },
+      ];
+
+      function currentIndex() {
+        const requested = new URLSearchParams(location.search).get('variant')?.toUpperCase();
+        const index = variants.findIndex((item) => item.key === requested);
+        return index < 0 ? 1 : index;
+      }
+
+      function render() {
+        const variant = variants[currentIndex()];
+        document.querySelector('#app').innerHTML = variant.render();
+        document.querySelector('#variant-label').textContent = `${variant.key} · ${variant.name}`;
+        document.title = `${variant.key} · ${variant.name} — Indexary`;
+        document.querySelectorAll('#workbench-prose h2').forEach((heading, index) => {
+          heading.id = ['principles-c', 'layers-c', 'open-c'][index];
+        });
+        if (variant.key === 'B') hydrateVault();
+      }
+
+      function move(offset) {
+        const nextIndex = (currentIndex() + offset + variants.length) % variants.length;
+        const url = new URL(location.href);
+        url.searchParams.set('variant', variants[nextIndex].key);
+        history.replaceState({}, '', url);
+        window.scrollTo({ top: 0 });
+        render();
+      }
+
+      document.querySelector('#previous').addEventListener('click', () => move(-1));
+      document.querySelector('#next').addEventListener('click', () => move(1));
+      window.addEventListener('keydown', (event) => {
+        const target = event.target;
+        if (target.matches('input, textarea, [contenteditable]')) return;
+        if (event.key === 'ArrowLeft') move(-1);
+        if (event.key === 'ArrowRight') move(1);
+      });
+      window.addEventListener('popstate', render);
+      render();
+    </script>
+  </body>
+</html>
