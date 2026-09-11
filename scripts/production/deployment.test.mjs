@@ -234,8 +234,8 @@ async function setupDeployment(context, prefix = "indexary-deploy-") {
   const paths = testPaths(root);
   const previous = await createRelease(paths, ids[3]);
   const candidate = await createRelease(paths, ids[4]);
-  await installFixture(paths, previous);
-  return { root, paths, previous, candidate };
+  const knowledgeBase = await installFixture(paths, previous);
+  return { root, paths, previous, candidate, knowledgeBase };
 }
 
 test("deployment gates, isolates, activates, verifies, records, and retains three successful releases", async (context) => {
@@ -505,6 +505,48 @@ test("controlled post-activation failure proves rollback and leaves the predeces
   );
   assert.equal(events.filter((event) => event === "service-restart").length, 2);
   assert.equal(events.at(-1), "rollback-complete");
+});
+
+test("retention waits for the final Knowledge Base fingerprint", async (context) => {
+  const { root, paths, previous, candidate, knowledgeBase } =
+    await setupDeployment(context, "indexary-fingerprint-before-prune-");
+  for (const id of ids.slice(0, 3)) {
+    await createRelease(paths, id);
+  }
+  await writeFile(
+    path.join(paths.stateRoot, "successful-releases.json"),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      releaseIds: [...ids.slice(0, 3), previous.manifest.releaseId],
+    })}\n`,
+  );
+  let changed = false;
+  const dependencies = fakeDependencies(candidate, []);
+  dependencies.verifyApplication = async () => {
+    if (!changed) {
+      changed = true;
+      await writeFile(path.join(knowledgeBase, "index.md"), "# Changed\n");
+    }
+  };
+
+  await assert.rejects(
+    () => deployRelease({ paths, sourceRoot: root }, dependencies),
+    /Knowledge Base differs/,
+  );
+
+  assert.equal(changed, true);
+  assert.notEqual(
+    await lstat(path.join(paths.releasesRoot, ids[0])).catch(() => undefined),
+    undefined,
+  );
+  assert.equal(
+    await readlink(paths.currentLink),
+    `releases/${previous.manifest.releaseId}`,
+  );
+  const transaction = JSON.parse(
+    await readFile(path.join(paths.stateRoot, "deployment.json"), "utf8"),
+  );
+  assert.equal(transaction.status, "rolled-back");
 });
 
 test("a handled signal after activation rolls back before reporting failure", async (context) => {

@@ -1186,7 +1186,16 @@ export async function deployRelease(
       );
     }
 
-    transaction = await writeTransaction(paths, transaction, "verified");
+    const afterFingerprint = await fingerprintTree(
+      configuration.knowledgeBasePath,
+    );
+    if (afterFingerprint !== beforeFingerprint) {
+      throw new ProductionError(
+        "The Knowledge Base differs from its byte-for-byte pre-deployment state.",
+      );
+    }
+    checkInterrupted(isInterrupted);
+
     const history = await readSuccessfulHistory(paths, previous.releaseId);
     const nextHistory = [
       ...history.filter((releaseId) => releaseId !== built.manifest.releaseId),
@@ -1203,15 +1212,7 @@ export async function deployRelease(
       built.manifest.releaseId,
       nextHistory,
     );
-    const afterFingerprint = await fingerprintTree(
-      configuration.knowledgeBasePath,
-    );
-    if (afterFingerprint !== beforeFingerprint) {
-      throw new ProductionError(
-        "The Knowledge Base differs from its byte-for-byte pre-deployment state.",
-      );
-    }
-    checkInterrupted(isInterrupted);
+    transaction = await writeTransaction(paths, transaction, "verified");
     dependencies.report?.({
       event: "deployment-verified",
       releaseId: built.manifest.releaseId,
