@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, readdir, readlink } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { setTimeout as delayFor } from "node:timers/promises";
 
 const configuredRoot = process.env.INDEXARY_KB_PATH;
 
@@ -62,6 +63,7 @@ async function main() {
     "pnpm",
     ["run", "dev", "--", "--profile", "personal-smoke", "--port", "4175"],
     {
+      detached: true,
       stdio: "inherit",
       env: {
         ...process.env,
@@ -70,14 +72,52 @@ async function main() {
     },
   );
 
+  function signalChildGroup(signal) {
+    if (child.pid === undefined) {
+      return;
+    }
+
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
+
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => child.kill(signal));
+    process.on(signal, () => signalChildGroup(signal));
   }
 
   const exit = await new Promise((resolve) => {
     child.once("error", () => resolve({ code: 1, signal: undefined }));
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
+
+  if (child.pid !== undefined) {
+    const shutdownDeadline = Date.now() + 5_000;
+    while (Date.now() < shutdownDeadline) {
+      try {
+        process.kill(-child.pid, 0);
+      } catch (error) {
+        if (error?.code === "ESRCH") {
+          break;
+        }
+        throw error;
+      }
+      await delayFor(25);
+    }
+
+    try {
+      process.kill(-child.pid, 0);
+      signalChildGroup("SIGKILL");
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
 
   let after;
   try {
