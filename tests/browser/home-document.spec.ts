@@ -159,3 +159,78 @@ test("follows a wikilink and its backlink with browser history", async ({
     }),
   ).toBeVisible();
 });
+test("searches from the keyboard, opens a result, preserves history, and explains no matches", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog", { name: "Поиск Документов" });
+  const input = dialog.getByPlaceholder("Поиск по Базе знаний");
+  await input.fill("Вложенный");
+  await expect(
+    dialog.getByRole("link", { name: /Проект Альфа/ }),
+  ).toBeVisible();
+  await input.press("ArrowDown");
+  await input.press("Enter");
+  await expect(page).toHaveURL(/\/documents\/.*%20.*\.md$/);
+  await expect(
+    page.getByRole("heading", { name: "Проект Альфа", level: 1 }),
+  ).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL("http://127.0.0.1:4199/");
+  await page.keyboard.press("Control+k");
+  await page
+    .getByRole("dialog", { name: "Поиск Документов" })
+    .getByPlaceholder("Поиск по Базе знаний")
+    .fill("совершенно-несуществующий-запрос");
+  await expect(
+    page.getByText("Документы по этому запросу не найдены."),
+  ).toBeVisible();
+});
+
+test("filters through a clickable tag in the shared search experience", async ({
+  page,
+}) => {
+  await page.goto(
+    "/documents/%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%D1%8B/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%20%D0%90%D0%BB%D1%8C%D1%84%D0%B0.md",
+  );
+  await page.getByRole("button", { name: "проект" }).click();
+  const dialog = page.getByRole("dialog", { name: "Поиск Документов" });
+  await expect(dialog.getByText("Тег: проект")).toBeVisible();
+  await expect(
+    dialog.getByRole("link", { name: /Проект Альфа/ }),
+  ).toBeVisible();
+});
+
+test("renders adversarial highlighted snippet text without creating HTML", async ({
+  page,
+}) => {
+  await page.route("**/api/search?*", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        results: [
+          {
+            path: "index.md",
+            title: "Безопасный результат",
+            tags: [],
+            snippet: [
+              { text: "<img src=x ", highlighted: false },
+              { text: "onerror", highlighted: true },
+              { text: "=boom>", highlighted: false },
+            ],
+          },
+        ],
+      }),
+    });
+  });
+  await page.goto("/");
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog", { name: "Поиск Документов" });
+  await dialog.getByPlaceholder("Поиск по Базе знаний").fill("onerror");
+
+  await expect(dialog.locator("mark")).toHaveText("onerror");
+  await expect(dialog).toContainText("<img src=x onerror=boom>");
+  await expect(dialog.locator("img")).toHaveCount(0);
+});

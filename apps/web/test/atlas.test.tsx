@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -305,5 +306,112 @@ describe("Atlas", () => {
       screen.getByText('<img src=x onerror="alert(1)"> ссылается на Документ.'),
     ).toBeInTheDocument();
     expect(document.querySelector("img")).toBeNull();
+  });
+
+  test("opens search globally and renders highlighted snippets as inert text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        const data = url.startsWith("/api/search")
+          ? {
+              results: [
+                {
+                  path: "Опасный.md",
+                  title: "Безопасный результат",
+                  tags: ["проверка"],
+                  snippet: [
+                    { text: "<img src=x ", highlighted: false },
+                    { text: "onerror", highlighted: true },
+                    { text: "=boom>", highlighted: false },
+                  ],
+                },
+              ],
+            }
+          : url.startsWith("/api/catalog")
+            ? rootCatalog
+            : home;
+        return { ok: true, json: async () => data };
+      }),
+    );
+    renderAtlas();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const dialog = screen.getByRole("dialog", { name: "Поиск Документов" });
+    const input = within(dialog).getByPlaceholderText("Поиск по Базе знаний");
+    fireEvent.change(input, { target: { value: "onerror" } });
+
+    expect(
+      await within(dialog).findByRole("link", { name: /Безопасный результат/ }),
+    ).toHaveAttribute("href", documentRoute("Опасный.md"));
+    expect(within(dialog).getByText("onerror").tagName).toBe("MARK");
+    expect(within(dialog).getByText(/<img src=x/)).toBeInTheDocument();
+    expect(dialog.querySelector("img")).toBeNull();
+  });
+
+  test("opens the same search experience from a clickable tag", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      return {
+        ok: true,
+        json: async () =>
+          url.startsWith("/api/search")
+            ? { results: [] }
+            : url.startsWith("/api/catalog")
+              ? rootCatalog
+              : home,
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAtlas();
+
+    fireEvent.click(await screen.findByRole("button", { name: "важное" }));
+    expect(
+      screen.getByRole("dialog", { name: "Поиск Документов" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Тег: важное")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/search?tag=%D0%B2%D0%B0%D0%B6%D0%BD%D0%BE%D0%B5",
+        expect.anything(),
+      ),
+    );
+    expect(
+      await screen.findByText("Документы по этому запросу не найдены."),
+    ).toBeInTheDocument();
+  });
+
+  test("distinguishes an idle search from a failed search", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.startsWith("/api/search")) {
+          throw new Error("offline");
+        }
+        return {
+          ok: true,
+          json: async () =>
+            url.startsWith("/api/catalog") ? rootCatalog : home,
+        };
+      }),
+    );
+    renderAtlas();
+
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    expect(
+      screen.getByText(/Введите точное слово, фразу в кавычках/),
+    ).toBeInTheDocument();
+    fireEvent.change(
+      within(
+        screen.getByRole("dialog", { name: "Поиск Документов" }),
+      ).getByPlaceholderText("Поиск по Базе знаний"),
+      {
+        target: { value: "ошибка" },
+      },
+    );
+    expect(
+      await screen.findByText("Поиск сейчас недоступен."),
+    ).toBeInTheDocument();
   });
 });

@@ -537,3 +537,48 @@ describe("byte range parsing", () => {
     expect(parseByteRange(header, size)).toEqual(expected);
   });
 });
+
+describe("search API", () => {
+  test("serves safe uncapped search and exact tag filters", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-search-app-"));
+    temporaryDirectories.push(root);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    await writeFile(
+      path.join(root, "Поиск.md"),
+      "---\ntags: [важное]\nstatus: активный\n---\n# Поиск\n\nКириллический фрагмент.\n",
+    );
+    const before = await captureTree(root);
+    const app = await buildApplication(config(root));
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/search",
+      query: { q: "кирилл*", tag: "ВАЖНОЕ" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      results: [
+        expect.objectContaining({
+          path: "Поиск.md",
+          title: "Поиск",
+          tags: ["важное"],
+          snippet: expect.arrayContaining([
+            expect.objectContaining({ highlighted: true }),
+          ]),
+        }),
+      ],
+    });
+    expect(response.json().results[0]).not.toHaveProperty("searchableText");
+    expect(response.json().results[0]).not.toHaveProperty("score");
+
+    const malformed = await app.inject({
+      method: "GET",
+      url: "/api/search",
+      query: { q: '" ) OR * : --' },
+    });
+    expect(malformed.statusCode).toBe(200);
+    expect(malformed.json()).toEqual({ results: [] });
+    await app.close();
+    expect(await captureTree(root)).toEqual(before);
+  });
+});

@@ -4,6 +4,19 @@ export const ru = {
   atlas: "Атлас",
   knowledgeBase: "База знаний",
   searchPlaceholder: "Поиск по Базе знаний",
+  search: "Поиск Документов",
+  closeSearch: "Закрыть поиск",
+  searchPrompt:
+    "Введите точное слово, фразу в кавычках или префикс со звёздочкой.",
+  searchLoading: "Ищем Документы…",
+  searchFailed: "Поиск сейчас недоступен.",
+  searchEmpty: "Документы по этому запросу не найдены.",
+  searchCount: (count: number) =>
+    `Найдено Документов: ${count}. Показаны все результаты.`,
+  tagFilter: (tag: string) => `Тег: ${tag}`,
+  clearTagFilter: "Убрать фильтр по тегу",
+  searchLimitations:
+    "Поиск точный: без морфологии, исправления опечаток, нечёткого совпадения и распознавания текста материалов.",
   home: "Главная",
   lastDocument: "Последний Документ",
   rootFolder: "Корень Базы знаний",

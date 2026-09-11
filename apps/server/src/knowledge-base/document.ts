@@ -71,6 +71,16 @@ export interface InterpretDocumentOptions {
   resolveWikilink?: ResolveWikilink;
 }
 
+export interface DocumentSearchFields {
+  body: string;
+  metadata: DocumentProperty[];
+}
+
+export interface InterpretedDocument<DocumentPath extends string = string> {
+  document: DocumentRepresentation<DocumentPath>;
+  searchFields: DocumentSearchFields;
+}
+
 interface MarkdownNode {
   type: string;
   value?: string;
@@ -551,11 +561,11 @@ function normalizeSearchableText(values: readonly string[]): string {
   return values.join(" ").replace(/\s+/g, " ").trim();
 }
 
-export async function interpretDocument<DocumentPath extends string>(
+export async function interpretDocumentForIndex<DocumentPath extends string>(
   documentPath: DocumentPath,
   markdown: string,
   options: InterpretDocumentOptions = {},
-): Promise<DocumentRepresentation<DocumentPath>> {
+): Promise<InterpretedDocument<DocumentPath>> {
   const diagnostics: DocumentDiagnostic[] = [];
   const separated = splitFrontmatter(markdown);
   const metadata = parseFrontmatter(
@@ -644,19 +654,42 @@ export async function interpretDocument<DocumentPath extends string>(
     bodyText,
   ]);
 
+  const stringMetadata = [...metadata]
+    .filter(
+      (entry): entry is [string, string] =>
+        typeof entry[1] === "string" &&
+        !["title", "tags", "originals", "original_path"].includes(entry[0]),
+    )
+    .map(([name, value]) => ({ name, value }));
+
   return {
-    path: documentPath,
-    title,
-    html,
-    searchableText,
-    tags,
-    sourceMaterials,
-    attachmentPaths,
-    properties,
-    diagnostics,
-    outgoingLinks,
-    backlinks: [],
+    document: {
+      path: documentPath,
+      title,
+      html,
+      searchableText,
+      tags,
+      sourceMaterials,
+      attachmentPaths,
+      properties,
+      diagnostics,
+      outgoingLinks,
+      backlinks: [],
+    },
+    searchFields: {
+      body: normalizeSearchableText([bodyText]),
+      metadata: stringMetadata,
+    },
   };
+}
+
+export async function interpretDocument<DocumentPath extends string>(
+  documentPath: DocumentPath,
+  markdown: string,
+  options: InterpretDocumentOptions = {},
+): Promise<DocumentRepresentation<DocumentPath>> {
+  return (await interpretDocumentForIndex(documentPath, markdown, options))
+    .document;
 }
 
 export function unreadableDocument<DocumentPath extends string>(

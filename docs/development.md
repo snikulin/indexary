@@ -44,8 +44,8 @@ Tests verify that Indexary leaves the fixture Knowledge Base byte-for-byte uncha
 
 Fixture development and development against a personal Knowledge Base may run simultaneously. They use different ports and cache namespaces so their derived indexes cannot collide.
 
-The initial catalog database is rebuilt from the filesystem under
-`$XDG_CACHE_HOME/indexary/catalog-v1/<profile>/<knowledge-base-id>` (or the
+The derived catalog and full-text search database is rebuilt from the filesystem under
+`$XDG_CACHE_HOME/indexary/catalog-v2/<profile>/<knowledge-base-id>` (or the
 platform cache fallback when `XDG_CACHE_HOME` is unset). The profile and a
 non-reversible identifier derived from the canonical Knowledge Base path form
 the namespace; no Indexary-owned database is created inside the Knowledge Base.

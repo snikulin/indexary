@@ -265,6 +265,30 @@ const CatalogResponse = Type.Object(
   },
   { additionalProperties: false },
 );
+const SearchResponse = Type.Object(
+  {
+    results: Type.Array(
+      Type.Object(
+        {
+          path: Type.String({ minLength: 1 }),
+          title: Type.String({ minLength: 1 }),
+          tags: Type.Array(Type.String({ minLength: 1 })),
+          snippet: Type.Array(
+            Type.Object(
+              {
+                text: Type.String(),
+                highlighted: Type.Boolean(),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export interface ApplicationOptions {
   knowledgeBase?: KnowledgeBase;
@@ -444,6 +468,28 @@ export async function buildApplication(
   );
 
   typedApp.get(
+    "/api/search",
+    {
+      schema: {
+        querystring: Type.Object(
+          {
+            q: Type.Optional(Type.String({ maxLength: 500 })),
+            tag: Type.Optional(Type.String({ maxLength: 200 })),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: SearchResponse },
+      },
+    },
+    async (request) => ({
+      results: await knowledgeBase.searchDocuments({
+        ...(request.query.q === undefined ? {} : { query: request.query.q }),
+        ...(request.query.tag === undefined ? {} : { tag: request.query.tag }),
+      }),
+    }),
+  );
+
+  typedApp.get(
     "/api/health/ready",
     { schema: { response: { 200: ReadyResponse, 503: NotReadyResponse } } },
     async (_request, reply) => {
@@ -491,6 +537,6 @@ export async function buildApplication(
     }
   }
 
-  void knowledgeBase.initialize();
+  await knowledgeBase.initialize();
   return app;
 }

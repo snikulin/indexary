@@ -4,9 +4,12 @@ import tseslint from "typescript-eslint";
 export default tseslint.config(
   {
     ignores: [
+      ".agents/**",
+      ".claude/**",
       "**/dist/**",
       "**/node_modules/**",
       "playwright-report/**",
+      "skills-lock.json",
       "test-results/**",
     ],
   },

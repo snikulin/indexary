@@ -4,8 +4,9 @@
 
 > Project status: the production-shaped Atlas opens the Home Document and browses the
 > complete nested Document catalog, follows deterministic wikilinks and backlinks, and
-> previews referenced Source Materials and Attachments through React, Fastify, and a
-> rebuildable SQLite cache; the rest of the v1 behaviors are under active implementation.
+> previews referenced Source Materials and Attachments and searches Documents through
+> React, Fastify, and a rebuildable SQLite FTS5 cache; the rest of the v1 behaviors are
+> under active implementation.
 
 ## Overview
 

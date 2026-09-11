@@ -12,12 +12,13 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import {
   documentRoute,
   fetchCatalog,
   fetchDocument,
+  fetchSearch,
   folderRoute,
   materialUrl,
   type DocumentRepresentation,
@@ -69,9 +70,11 @@ function lastDocument(): string | undefined {
 function Navigation({
   selection,
   close,
+  openSearch,
 }: {
   selection: AtlasSelection;
   close?: () => void;
+  openSearch: () => void;
 }) {
   const folderPath =
     selection.kind === "folder" ? selection.path : parentFolder(selection.path);
@@ -99,7 +102,15 @@ function Navigation({
       <label className="search-field">
         <Search aria-hidden="true" />
         <span className="sr-only">{ru.searchPlaceholder}</span>
-        <input type="search" placeholder={ru.searchPlaceholder} disabled />
+        <input
+          type="search"
+          placeholder={ru.searchPlaceholder}
+          value=""
+          readOnly
+          aria-keyshortcuts="Control+K Meta+K"
+          onFocus={openSearch}
+          onClick={openSearch}
+        />
       </label>
 
       <div className="tree-label">{ru.document}</div>
@@ -187,6 +198,164 @@ function Navigation({
         </>
       )}
     </nav>
+  );
+}
+
+function SearchDialog({
+  initialTag,
+  close,
+}: {
+  initialTag?: string;
+  close: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [tag, setTag] = useState(initialTag);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const resultLinks = useRef<Array<HTMLAnchorElement | null>>([]);
+  const hasCriteria = query.trim() !== "" || tag !== undefined;
+  const searchQuery = useQuery({
+    queryKey: ["search", query, tag],
+    queryFn: () => fetchSearch(query, tag),
+    enabled: hasCriteria,
+    retry: false,
+  });
+  const results = searchQuery.data?.results ?? [];
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [query, tag]);
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (results.length === 0) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((current) => (current + 1) % results.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex(
+        (current) => (current - 1 + results.length) % results.length,
+      );
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      resultLinks.current[activeIndex]?.click();
+    }
+  }
+
+  return (
+    <div className="search-layer">
+      <button
+        className="search-backdrop"
+        type="button"
+        aria-label={ru.closeSearch}
+        onClick={close}
+      />
+      <section
+        className="search-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="search-heading"
+      >
+        <div className="search-heading">
+          <div>
+            <p className="eyebrow">{ru.knowledgeBase}</p>
+            <h2 id="search-heading">{ru.search}</h2>
+          </div>
+          <Button className="icon-button" onClick={close} aria-label={ru.close}>
+            <X aria-hidden="true" />
+          </Button>
+        </div>
+        <label className="search-dialog-field">
+          <Search aria-hidden="true" />
+          <span className="sr-only">{ru.searchPlaceholder}</span>
+          <input
+            type="search"
+            placeholder={ru.searchPlaceholder}
+            value={query}
+            autoFocus
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+          <kbd>⌘/Ctrl K</kbd>
+        </label>
+        {tag === undefined ? null : (
+          <div className="active-tag-filter">
+            <span>{ru.tagFilter(tag)}</span>
+            <button
+              type="button"
+              aria-label={ru.clearTagFilter}
+              onClick={() => setTag(undefined)}
+            >
+              <X aria-hidden="true" />
+            </button>
+          </div>
+        )}
+
+        <div className="search-results" aria-live="polite">
+          {!hasCriteria ? (
+            <p className="search-state">{ru.searchPrompt}</p>
+          ) : searchQuery.isPending ? (
+            <p className="search-state">{ru.searchLoading}</p>
+          ) : searchQuery.isError ? (
+            <div className="search-state" role="status">
+              <p>{ru.searchFailed}</p>
+              <Button onClick={() => void searchQuery.refetch()}>
+                {ru.retry}
+              </Button>
+            </div>
+          ) : results.length === 0 ? (
+            <p className="search-state">{ru.searchEmpty}</p>
+          ) : (
+            <>
+              <p className="search-count">{ru.searchCount(results.length)}</p>
+              <ul className="search-result-list">
+                {results.map((result, index) => (
+                  <li key={result.path}>
+                    <a
+                      ref={(element) => {
+                        resultLinks.current[index] = element;
+                      }}
+                      className={index === activeIndex ? "active" : ""}
+                      href={
+                        result.path === "index.md"
+                          ? "/"
+                          : documentRoute(result.path)
+                      }
+                      onMouseEnter={() => setActiveIndex(index)}
+                      onClick={close}
+                    >
+                      <strong>{result.title}</strong>
+                      <small>/{result.path}</small>
+                      <p className="search-snippet">
+                        {result.snippet.map((part, partIndex) =>
+                          part.highlighted ? (
+                            <mark key={partIndex}>{part.text}</mark>
+                          ) : (
+                            <span key={partIndex}>{part.text}</span>
+                          ),
+                        )}
+                      </p>
+                      {result.tags.length === 0 ? null : (
+                        <span className="search-result-tags">
+                          {result.tags.join(" · ")}
+                        </span>
+                      )}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+        <p className="search-limitations">{ru.searchLimitations}</p>
+      </section>
+    </div>
   );
 }
 
@@ -474,8 +643,10 @@ function ContextSection({
 
 function DocumentView({
   selection,
+  openSearch,
 }: {
   selection: Extract<AtlasSelection, { kind: "document" }>;
+  openSearch: (tag: string) => void;
 }) {
   const documentPath = selection.path;
   const documentQuery = useQuery({
@@ -520,7 +691,11 @@ function DocumentView({
       {documentQuery.data.tags.length > 0 ? (
         <ul className="document-tags" aria-label={ru.tags}>
           {documentQuery.data.tags.map((tag) => (
-            <li key={tag}>{tag}</li>
+            <li key={tag}>
+              <button type="button" onClick={() => openSearch(tag)}>
+                {tag}
+              </button>
+            </li>
           ))}
         </ul>
       ) : null}
@@ -608,7 +783,26 @@ export function Atlas({
     navigation: false,
     context: false,
   });
+  const [search, setSearch] = useState<{
+    open: boolean;
+    tag?: string;
+  }>({ open: false });
   const closeDrawers = () => setDrawers({ navigation: false, context: false });
+  const openSearch = (tag?: string) => {
+    closeDrawers();
+    setSearch(tag === undefined ? { open: true } : { open: true, tag });
+  };
+
+  useEffect(() => {
+    const handleShortcut = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        openSearch();
+      }
+    };
+    document.addEventListener("keydown", handleShortcut);
+    return () => document.removeEventListener("keydown", handleShortcut);
+  }, []);
 
   return (
     <div className="app-shell">
@@ -639,13 +833,13 @@ export function Atlas({
 
       <div className="atlas-grid">
         <div className="desktop-panel">
-          <Navigation selection={selection} />
+          <Navigation selection={selection} openSearch={openSearch} />
         </div>
         <main className="document-column">
           {selection.kind === "folder" ? (
             <FolderView folderPath={selection.path} />
           ) : (
-            <DocumentView selection={selection} />
+            <DocumentView selection={selection} openSearch={openSearch} />
           )}
         </main>
         <div className="desktop-panel">
@@ -662,12 +856,23 @@ export function Atlas({
           />
           <div className="drawer">
             {drawers.navigation ? (
-              <Navigation selection={selection} close={closeDrawers} />
+              <Navigation
+                selection={selection}
+                close={closeDrawers}
+                openSearch={openSearch}
+              />
             ) : (
               <Context selection={selection} close={closeDrawers} />
             )}
           </div>
         </div>
+      ) : null}
+
+      {search.open ? (
+        <SearchDialog
+          initialTag={search.tag}
+          close={() => setSearch({ open: false })}
+        />
       ) : null}
     </div>
   );
