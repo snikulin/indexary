@@ -17,6 +17,17 @@ export interface CatalogFolder {
   diagnostics: Array<{ path: string; code: string; message: string }>;
 }
 
+export interface SearchResult {
+  path: string;
+  title: string;
+  tags: string[];
+  snippet: Array<{ text: string; highlighted: boolean }>;
+}
+
+export interface SearchResponse {
+  results: SearchResult[];
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
     headers: { accept: "application/json" },
@@ -61,4 +72,18 @@ export function fetchCatalog(folderPath = ""): Promise<CatalogFolder> {
   }
   const suffix = query.size === 0 ? "" : `?${query}`;
   return fetchJson<CatalogFolder>(`/api/catalog${suffix}`);
+}
+
+export function fetchSearch(
+  query: string,
+  tag?: string,
+): Promise<SearchResponse> {
+  const parameters = new URLSearchParams();
+  if (query.trim() !== "") {
+    parameters.set("q", query);
+  }
+  if (tag !== undefined && tag.trim() !== "") {
+    parameters.set("tag", tag);
+  }
+  return fetchJson<SearchResponse>(`/api/search?${parameters}`);
 }

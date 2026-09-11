@@ -13,13 +13,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
-  interpretDocument,
+  interpretDocumentForIndex,
   type DocumentRepresentation,
+  type DocumentSearchFields,
   unreadableDocument,
 } from "./document.js";
 
 const HOME_DOCUMENT_PATH = "index.md";
-const CATALOG_VERSION = 1;
+const CATALOG_VERSION = 2;
+const SNIPPET_START = "\u{E000}";
+const SNIPPET_END = "\u{E001}";
 
 export type KnowledgeBaseStatus =
   | { state: "initializing" }
@@ -53,8 +56,29 @@ export interface CatalogFolder {
   diagnostics: CatalogDiagnostic[];
 }
 
+export interface SearchSnippetPart {
+  text: string;
+  highlighted: boolean;
+}
+
+export interface SearchResult {
+  path: string;
+  title: string;
+  tags: string[];
+  snippet: SearchSnippetPart[];
+}
+
+export interface SearchRequest {
+  query?: string;
+  tag?: string;
+}
+
 export class InvalidKnowledgeBasePath extends Error {
   override readonly name = "InvalidKnowledgeBasePath";
+}
+
+export class KnowledgeBaseStartupError extends Error {
+  override readonly name = "KnowledgeBaseStartupError";
 }
 
 export interface KnowledgeBaseOptions {
@@ -72,6 +96,7 @@ export interface KnowledgeBase {
   openHomeDocument(): Promise<
     DocumentRepresentation<typeof HOME_DOCUMENT_PATH> | undefined
   >;
+  searchDocuments(request: SearchRequest): Promise<SearchResult[]>;
 }
 
 interface DiscoveredFolder {
@@ -93,6 +118,97 @@ interface Discovery {
 
 interface SqliteRow {
   [key: string]: null | number | string;
+}
+
+function normalizeIndexedText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replaceAll(SNIPPET_START, " ")
+    .replaceAll(SNIPPET_END, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeTag(value: string): string {
+  return normalizeIndexedText(value).toLowerCase();
+}
+
+function isFtsWordCharacter(character: string): boolean {
+  return /[\p{L}\p{M}\p{N}_]/u.test(character);
+}
+
+function ftsPhrase(value: string): string | undefined {
+  const words = value.match(/[\p{L}\p{M}\p{N}_]+/gu);
+  return words === null ? undefined : `"${words.join(" ")}"`;
+}
+
+export function buildSafeFtsQuery(input: string): string | undefined {
+  const normalized = input.normalize("NFKC");
+  const terms: string[] = [];
+
+  for (let index = 0; index < normalized.length;) {
+    const character = normalized[index]!;
+    if (character === '"') {
+      const closing = normalized.indexOf('"', index + 1);
+      const end = closing === -1 ? normalized.length : closing;
+      const phrase = ftsPhrase(normalized.slice(index + 1, end));
+      if (phrase !== undefined) {
+        terms.push(phrase);
+      }
+      index = closing === -1 ? normalized.length : closing + 1;
+      continue;
+    }
+    if (!isFtsWordCharacter(character)) {
+      index += 1;
+      continue;
+    }
+
+    let end = index + 1;
+    while (end < normalized.length && isFtsWordCharacter(normalized[end]!)) {
+      end += 1;
+    }
+    const word = normalized.slice(index, end);
+    const prefix = normalized[end] === "*";
+    terms.push(`"${word}"${prefix ? "*" : ""}`);
+    index = end + (prefix ? 1 : 0);
+  }
+
+  return terms.length === 0 ? undefined : terms.join(" AND ");
+}
+
+export function verifyFts5Support(database: Pick<DatabaseSync, "exec">): void {
+  try {
+    database.exec(
+      "CREATE VIRTUAL TABLE temp.__indexary_fts5_probe USING fts5(value); DROP TABLE temp.__indexary_fts5_probe;",
+    );
+  } catch (error) {
+    throw new KnowledgeBaseStartupError(
+      "The pinned Node 24 runtime does not provide the required SQLite FTS5 capability.",
+      { cause: error },
+    );
+  }
+}
+
+function snippetParts(value: string): SearchSnippetPart[] {
+  const parts: SearchSnippetPart[] = [];
+  let highlighted = false;
+  let offset = 0;
+
+  while (offset < value.length) {
+    const marker = highlighted ? SNIPPET_END : SNIPPET_START;
+    const markerOffset = value.indexOf(marker, offset);
+    const end = markerOffset === -1 ? value.length : markerOffset;
+    if (end > offset) {
+      parts.push({ text: value.slice(offset, end), highlighted });
+    }
+    if (markerOffset === -1) {
+      break;
+    }
+    highlighted = !highlighted;
+    offset = markerOffset + marker.length;
+  }
+
+  return parts;
 }
 
 const diagnosticMessages: Record<CatalogDiagnosticCode, string> = {
@@ -392,9 +508,11 @@ async function buildCatalog(
   let database: DatabaseSync | undefined;
   try {
     database = new DatabaseSync(temporaryFile);
+    verifyFts5Support(database);
     database.exec(`
       PRAGMA journal_mode = DELETE;
       PRAGMA synchronous = FULL;
+      PRAGMA foreign_keys = ON;
       PRAGMA user_version = ${CATALOG_VERSION};
       CREATE TABLE folders (
         path TEXT PRIMARY KEY,
@@ -408,6 +526,31 @@ async function buildCatalog(
         representation_json TEXT NOT NULL,
         FOREIGN KEY (folder_path) REFERENCES folders(path)
       ) STRICT;
+      CREATE TABLE document_tags (
+        document_path TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        normalized_tag TEXT NOT NULL,
+        PRIMARY KEY (document_path, tag),
+        FOREIGN KEY (document_path) REFERENCES documents(path) ON DELETE CASCADE
+      ) STRICT;
+      CREATE INDEX document_tags_normalized
+        ON document_tags(normalized_tag, document_path);
+      CREATE TABLE document_metadata (
+        document_path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (document_path, name),
+        FOREIGN KEY (document_path) REFERENCES documents(path) ON DELETE CASCADE
+      ) STRICT;
+      CREATE VIRTUAL TABLE document_search USING fts5(
+        document_path UNINDEXED,
+        title,
+        tags,
+        relative_path,
+        metadata,
+        body,
+        tokenize = 'unicode61 remove_diacritics 0'
+      );
       CREATE TABLE diagnostics (
         path TEXT NOT NULL,
         code TEXT NOT NULL,
@@ -426,6 +569,15 @@ async function buildCatalog(
     const insertDocument = database.prepare(
       "INSERT INTO documents(path, folder_path, title, representation_json) VALUES (?, ?, ?, ?)",
     );
+    const insertTag = database.prepare(
+      "INSERT INTO document_tags(document_path, tag, normalized_tag) VALUES (?, ?, ?)",
+    );
+    const insertMetadata = database.prepare(
+      "INSERT INTO document_metadata(document_path, name, value) VALUES (?, ?, ?)",
+    );
+    const insertSearch = database.prepare(
+      "INSERT INTO document_search(document_path, title, tags, relative_path, metadata, body) VALUES (?, ?, ?, ?, ?, ?)",
+    );
     const insertDiagnostic = database.prepare(
       "INSERT INTO diagnostics(path, code, message) VALUES (?, ?, ?)",
     );
@@ -435,13 +587,17 @@ async function buildCatalog(
     }
     for (const discovered of discovery.documents) {
       let document: DocumentRepresentation;
+      let searchFields: DocumentSearchFields;
       try {
-        document = await interpretDocument(
+        const interpreted = await interpretDocumentForIndex(
           discovered.path,
           await readFile(discovered.canonicalPath, "utf8"),
         );
+        document = interpreted.document;
+        searchFields = interpreted.searchFields;
       } catch {
         document = unreadableDocument(discovered.path);
+        searchFields = { body: "", metadata: [] };
       }
       insertDocument.run(
         document.path,
@@ -450,6 +606,22 @@ async function buildCatalog(
           : path.posix.dirname(document.path),
         document.title,
         JSON.stringify(document),
+      );
+      for (const tag of document.tags) {
+        insertTag.run(document.path, tag, normalizeTag(tag));
+      }
+      for (const property of searchFields.metadata) {
+        insertMetadata.run(document.path, property.name, property.value);
+      }
+      insertSearch.run(
+        document.path,
+        normalizeIndexedText(document.title),
+        normalizeIndexedText(document.tags.join(" ")),
+        normalizeIndexedText(document.path),
+        normalizeIndexedText(
+          searchFields.metadata.map((property) => property.value).join(" "),
+        ),
+        normalizeIndexedText(searchFields.body),
       );
     }
     for (const diagnostic of discovery.diagnostics) {
@@ -489,6 +661,22 @@ function queryCatalog<T>(
   }
 }
 
+function searchResultFromRow(row: SqliteRow, snippet?: string): SearchResult {
+  const representation = JSON.parse(
+    String(row.representation_json),
+  ) as DocumentRepresentation;
+  const parts = snippet === undefined ? [] : snippetParts(snippet);
+  return {
+    path: String(row.path),
+    title: String(row.title),
+    tags: representation.tags,
+    snippet:
+      parts.length === 0
+        ? [{ text: String(row.title), highlighted: false }]
+        : parts,
+  };
+}
+
 export function createKnowledgeBase(
   configuredRoot: string,
   options: KnowledgeBaseOptions = {},
@@ -523,8 +711,11 @@ export function createKnowledgeBase(
         home === undefined
           ? { state: "home-document-unavailable" }
           : { state: "ready" };
-    } catch {
+    } catch (error) {
       currentStatus = { state: "home-document-unavailable" };
+      if (error instanceof KnowledgeBaseStartupError) {
+        throw error;
+      }
     }
   }
 
@@ -606,6 +797,86 @@ export function createKnowledgeBase(
     async openHomeDocument() {
       return (await this.openDocument(HOME_DOCUMENT_PATH)) as
         DocumentRepresentation<typeof HOME_DOCUMENT_PATH> | undefined;
+    },
+    async searchDocuments(request) {
+      const query = request.query?.trim() ?? "";
+      const tag = request.tag?.trim() ?? "";
+      if (query === "" && tag === "") {
+        return [];
+      }
+
+      const file = await initializedCatalog();
+      if (file === undefined) {
+        return [];
+      }
+      const normalizedTag = tag === "" ? undefined : normalizeTag(tag);
+
+      if (query === "") {
+        return queryCatalog(file, (database) => {
+          const rows = database
+            .prepare(
+              `SELECT path, title, representation_json
+               FROM documents
+               WHERE EXISTS (
+                 SELECT 1 FROM document_tags
+                 WHERE document_path = documents.path
+                   AND normalized_tag = ?
+               )
+               ORDER BY title, path`,
+            )
+            .all(normalizedTag!) as unknown as SqliteRow[];
+          return rows.map((row) => {
+            const result = searchResultFromRow(row);
+            const matchingTag = result.tags.find(
+              (candidate) => normalizeTag(candidate) === normalizedTag,
+            );
+            return {
+              ...result,
+              snippet: [
+                {
+                  text: matchingTag ?? tag,
+                  highlighted: true,
+                },
+              ],
+            };
+          });
+        });
+      }
+
+      const matchExpression = buildSafeFtsQuery(query);
+      if (matchExpression === undefined) {
+        return [];
+      }
+
+      return queryCatalog(file, (database) => {
+        const rows = database
+          .prepare(
+            `SELECT document_search.document_path AS path,
+                    documents.title,
+                    documents.representation_json,
+                    snippet(document_search, -1, ?, ?, ' … ', 24) AS snippet,
+                    bm25(document_search, 0.0, 12.0, 8.0, 4.0, 2.0, 1.0) AS score
+             FROM document_search
+             JOIN documents ON documents.path = document_search.document_path
+             WHERE document_search MATCH ?
+               AND (
+                 ? IS NULL OR EXISTS (
+                   SELECT 1 FROM document_tags
+                   WHERE document_path = documents.path
+                     AND normalized_tag = ?
+                 )
+               )
+             ORDER BY score, documents.path`,
+          )
+          .all(
+            SNIPPET_START,
+            SNIPPET_END,
+            matchExpression,
+            normalizedTag ?? null,
+            normalizedTag ?? null,
+          ) as unknown as SqliteRow[];
+        return rows.map((row) => searchResultFromRow(row, String(row.snippet)));
+      });
     },
   };
 }

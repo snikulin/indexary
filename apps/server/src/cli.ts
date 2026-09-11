@@ -2,6 +2,7 @@ import process from "node:process";
 
 import { buildApplication } from "./application.js";
 import { ConfigurationError, resolveRuntimeConfig } from "./config.js";
+import { KnowledgeBaseStartupError } from "./knowledge-base/index.js";
 
 async function main(): Promise<void> {
   try {
@@ -25,7 +26,8 @@ async function main(): Promise<void> {
     );
   } catch (error) {
     const message =
-      error instanceof ConfigurationError
+      error instanceof ConfigurationError ||
+      error instanceof KnowledgeBaseStartupError
         ? error.message
         : "Indexary could not be started.";
     console.error(message);

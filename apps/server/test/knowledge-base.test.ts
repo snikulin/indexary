@@ -13,8 +13,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, test } from "vitest";
 
 import {
+  buildSafeFtsQuery,
   createKnowledgeBase,
   InvalidKnowledgeBasePath,
+  KnowledgeBaseStartupError,
+  verifyFts5Support,
 } from "../src/knowledge-base/index.js";
 import { captureTree } from "./helpers.js";
 
@@ -226,13 +229,24 @@ describe("Knowledge Base", () => {
     expect(fixtureCatalog).toBeDefined();
     expect(personalCatalog).toBeDefined();
     expect(fixtureCatalog).not.toBe(personalCatalog);
-    expect(fixtureCatalog).toContain(`catalog-v1${path.sep}fixture`);
+    expect(fixtureCatalog).toContain(`catalog-v2${path.sep}fixture`);
     const database = new DatabaseSync(path.join(cacheRoot, fixtureCatalog!), {
       readOnly: true,
     });
     expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 1,
+      user_version: 2,
     });
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('document_search', 'document_tags', 'document_metadata') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([
+      { name: "document_metadata" },
+      { name: "document_search" },
+      { name: "document_tags" },
+    ]);
     database.close();
 
     await writeFile(path.join(root, "Новый.md"), "# Новый\n");
@@ -325,5 +339,173 @@ describe("Knowledge Base", () => {
       code: "RAW_HTML_REMOVED",
       message: "Небезопасный HTML удалён из Документа.",
     });
+  });
+
+  test("searches weighted Document fields with safe useful snippets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-search-"));
+    temporaryDirectories.push(root);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    await writeFile(
+      path.join(root, "Заголовок.md"),
+      "---\ntitle: Квантовый компас\n---\nОбычный текст.\n",
+    );
+    await writeFile(
+      path.join(root, "Тег.md"),
+      "---\ntags: [квантовый, 'важное: сейчас']\n---\n# Метка\n\nОбычный текст.\n",
+    );
+    await writeFile(
+      path.join(root, "Каталог-квантовый.md"),
+      "# Маршрут\n\nОбычный текст.\n",
+    );
+    await writeFile(
+      path.join(root, "Метаданные.md"),
+      "---\nstatus: квантовый\ncount: 2048\n---\n# Свойства\n\nОбычный текст.\n",
+    );
+    await writeFile(
+      path.join(root, "Тело.md"),
+      "# Тело\n\nКвантовый сигнал. Быстрый бурый лис. Кот и коты. Проектирование.\n",
+    );
+    await writeFile(
+      path.join(root, "Только коты.md"),
+      "# Множественное\n\nКоты.\n",
+    );
+    await writeFile(
+      path.join(root, "Опасный.md"),
+      "# Безопасный фрагмент\n\n`<img src=x onerror=boom>`\n",
+    );
+    await writeFile(path.join(root, "Акцент.md"), "# Акцент\n\nCafé.\n");
+    await writeFile(path.join(root, "Без акцента.md"), "# Plain\n\nCafe.\n");
+    await writeFile(path.join(root, "материал.pdf"), "binarysecret\n");
+    await writeFile(path.join(root, "архив.bin"), "attachmentsecret\n");
+    await writeFile(
+      path.join(root, "Материалы.md"),
+      "---\noriginals: [материал.pdf]\n---\n# Материалы\n\n[архив](архив.bin)\n",
+    );
+    const before = await captureTree(root);
+    const knowledgeBase = await createTestKnowledgeBase(root, "search");
+    await knowledgeBase.initialize();
+
+    const weighted = await knowledgeBase.searchDocuments({
+      query: "квантовый",
+    });
+    const order = weighted.map((result) => result.path);
+    expect(order.indexOf("Заголовок.md")).toBeLessThan(
+      order.indexOf("Тело.md"),
+    );
+    expect(order.indexOf("Тег.md")).toBeLessThan(order.indexOf("Тело.md"));
+    expect(order.indexOf("Каталог-квантовый.md")).toBeLessThan(
+      order.indexOf("Тело.md"),
+    );
+    expect(order.indexOf("Метаданные.md")).toBeLessThan(
+      order.indexOf("Тело.md"),
+    );
+    expect(weighted.every((result) => result.snippet.length > 0)).toBe(true);
+    expect(
+      weighted.some((result) =>
+        result.snippet.some((part) => part.highlighted),
+      ),
+    ).toBe(true);
+
+    await expect(
+      knowledgeBase.searchDocuments({ query: '"быстрый бурый"' }),
+    ).resolves.toEqual([expect.objectContaining({ path: "Тело.md" })]);
+    await expect(
+      knowledgeBase.searchDocuments({ query: "проект*" }),
+    ).resolves.toEqual([expect.objectContaining({ path: "Тело.md" })]);
+    await expect(
+      knowledgeBase.searchDocuments({ query: "кот" }),
+    ).resolves.toEqual([expect.objectContaining({ path: "Тело.md" })]);
+    await expect(
+      knowledgeBase.searchDocuments({ query: "café" }),
+    ).resolves.toEqual([expect.objectContaining({ path: "Акцент.md" })]);
+    await expect(
+      knowledgeBase.searchDocuments({ query: "cafe" }),
+    ).resolves.toEqual([expect.objectContaining({ path: "Без акцента.md" })]);
+    await expect(
+      knowledgeBase.searchDocuments({ tag: "ВАЖНОЕ: СЕЙЧАС" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        path: "Тег.md",
+        snippet: [{ text: "важное: сейчас", highlighted: true }],
+      }),
+    ]);
+    await expect(
+      knowledgeBase.searchDocuments({ query: "2048" }),
+    ).resolves.toEqual([]);
+    await expect(
+      knowledgeBase.searchDocuments({ query: "binarysecret" }),
+    ).resolves.toEqual([]);
+    await expect(
+      knowledgeBase.searchDocuments({ query: "attachmentsecret" }),
+    ).resolves.toEqual([]);
+
+    const adversarial = await knowledgeBase.searchDocuments({
+      query: "onerror OR 1=1 -- NEAR(secret)",
+    });
+    expect(adversarial).toEqual([]);
+    const safeSnippet = await knowledgeBase.searchDocuments({
+      query: "onerror",
+    });
+    expect(safeSnippet).toEqual([
+      expect.objectContaining({
+        path: "Опасный.md",
+        snippet: expect.arrayContaining([
+          expect.objectContaining({ text: "onerror", highlighted: true }),
+        ]),
+      }),
+    ]);
+    expect(safeSnippet[0]).not.toHaveProperty("html");
+    expect(await captureTree(root)).toEqual(before);
+  });
+
+  test("returns every search result without a silent cap", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-search-complete-"),
+    );
+    temporaryDirectories.push(root);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    await Promise.all(
+      Array.from({ length: 125 }, (_, index) =>
+        writeFile(
+          path.join(root, `Результат ${index}.md`),
+          `# Результат ${index}\n\nПолныйсписок\n`,
+        ),
+      ),
+    );
+    const knowledgeBase = await createTestKnowledgeBase(root, "uncapped");
+    await knowledgeBase.initialize();
+
+    expect(
+      await knowledgeBase.searchDocuments({ query: "полныйсписок" }),
+    ).toHaveLength(125);
+  });
+});
+
+describe("safe FTS query construction", () => {
+  test("allows only exact words, phrases, and trailing prefixes", () => {
+    expect(buildSafeFtsQuery('кот "быстрый лис" проек*')).toBe(
+      '"кот" AND "быстрый лис" AND "проек"*',
+    );
+    expect(buildSafeFtsQuery('OR NEAR(secret) "незакрытая фраза')).toBe(
+      '"OR" AND "NEAR" AND "secret" AND "незакрытая фраза"',
+    );
+    expect(buildSafeFtsQuery("*** -- ()")).toBeUndefined();
+  });
+
+  test("reports a clear operational error when FTS5 is unavailable", () => {
+    expect(() =>
+      verifyFts5Support({
+        exec() {
+          throw new Error("no such module: fts5");
+        },
+      }),
+    ).toThrowError(KnowledgeBaseStartupError);
+    expect(() =>
+      verifyFts5Support({
+        exec() {
+          throw new Error("no such module: fts5");
+        },
+      }),
+    ).toThrow(/pinned Node 24 runtime.*SQLite FTS5/);
   });
 });
