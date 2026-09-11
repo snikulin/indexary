@@ -593,21 +593,25 @@ export async function verifyManagedService(
     "show",
     SERVICE_NAME,
     "--property=Type",
+    "--property=Restart",
     "--property=MainPID",
     "--property=ActiveState",
     "--property=SubState",
     "--property=FragmentPath",
     "--property=InvocationID",
+    "--property=UnitFileState",
   ]);
   const properties = parseProperties(statusResult.stdout);
   const mainPid = Number(properties.MainPID);
   if (
     properties.Type !== "exec" ||
+    properties.Restart !== "on-failure" ||
     properties.ActiveState !== "active" ||
     properties.SubState !== "running" ||
     properties.FragmentPath !== paths.unitFile ||
     !Number.isSafeInteger(mainPid) ||
     mainPid <= 0 ||
+    properties.UnitFileState !== "enabled" ||
     !/^[0-9a-f]{32}$/.test(properties.InvocationID ?? "")
   ) {
     throw new ProductionError(
@@ -1395,6 +1399,7 @@ async function transientServiceState(unitName, commandRunner) {
     "show",
     unitName,
     "--property=Type",
+    "--property=Restart",
     "--property=MainPID",
     "--property=ActiveState",
     "--property=SubState",
@@ -1404,6 +1409,7 @@ async function transientServiceState(unitName, commandRunner) {
   const mainPid = Number(properties.MainPID);
   if (
     properties.Type !== "exec" ||
+    properties.Restart !== "on-failure" ||
     properties.ActiveState !== "active" ||
     properties.SubState !== "running" ||
     !Number.isSafeInteger(mainPid) ||
