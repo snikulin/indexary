@@ -296,6 +296,25 @@ describe("assembled Fastify application", () => {
     await app.close();
   });
 
+  test("reports Knowledge Base startup failure separately from a missing Home Document", async () => {
+    const parent = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-unavailable-root-"),
+    );
+    temporaryDirectories.push(parent);
+    const app = await buildApplication(config(path.join(parent, "missing")));
+    await app.ready();
+
+    await eventually(async () => {
+      const response = await app.inject("/api/health/ready");
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({
+        status: "not-ready",
+        reason: "knowledge-base-unavailable",
+      });
+    });
+    await app.close();
+  });
+
   test("serves optimized web assets and the application interface from one origin", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "indexary-web-root-"));
     temporaryDirectories.push(root);

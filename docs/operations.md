@@ -184,10 +184,17 @@ the complete local application smoke must pass within bounded time. This is a
 single-service restart: there is no blue/green deployment, automatic updater,
 ambient runtime, or public listener.
 
+Successful completion is recorded as `locally-verified`, and its lifecycle
+event is `deployment-locally-verified`. These names deliberately do not claim
+tailnet or human production verification; those remain Issue #15.
+
 Every transaction is recorded atomically at
 `$XDG_STATE_HOME/indexary/deployment.json`; it contains release identities and
-phase status, never Knowledge Base paths, Document names, content, metadata, or
-material identifiers. Only one deployment lock may exist. A handled
+phase status. While candidate smoke is active it also contains the disposable
+candidate cache path, loopback port, and process ID plus Linux process start
+time so interruption recovery can distinguish PID reuse. It never contains
+Knowledge Base paths, Document names, content, metadata, or material
+identifiers. Only one deployment lock may exist. A handled
 interruption or any gate/staging/candidate/activation/restart/readiness/post-smoke
 failure restores the recorded preceding release, rewrites its release identity
 in private configuration, restarts it, and requires it to become ready. The
@@ -220,8 +227,8 @@ command; do not edit `current` by hand. Status output includes only safe release
 identities and one next action. Abandoned contained staging directories are
 removed on the next safe run; an unknown or symbolic-link target is refused.
 
-After a deployment is fully verified and the Knowledge Base fingerprint remains
-identical, retention keeps the active release and its two successful
+After a deployment is locally verified and the Knowledge Base fingerprint
+remains identical, retention keeps the active release and its two successful
 predecessors. Pruning validates every exact child of `releases/`, never follows
 symbolic links, and never touches configuration, transaction state, the active
 production cache, or a candidate cache.

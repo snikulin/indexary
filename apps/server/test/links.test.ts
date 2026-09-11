@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
 
-import { createWikilinkResolver } from "../src/knowledge-base/links.js";
+import {
+  createWikilinkResolver,
+  documentRoute,
+} from "../src/knowledge-base/links.js";
 
 describe("wikilink resolution", () => {
   test("uses relative, root, and unique filename precedence", () => {
@@ -10,6 +13,7 @@ describe("wikilink resolution", () => {
       "Раздел/Цель.md",
       "Глубже/Единственная.md",
       "Раздел/RFC:123.md",
+      "Раздел/C:\\private.md",
     ]);
 
     expect(resolve("Раздел/Источник.md", "Цель")).toEqual({
@@ -32,6 +36,10 @@ describe("wikilink resolution", () => {
       state: "resolved",
       path: "Раздел/RFC:123.md",
     });
+    expect(resolve("Раздел/Источник.md", "C:\\private")).toEqual({
+      state: "resolved",
+      path: "Раздел/C:\\private.md",
+    });
   });
 
   test("never lets candidate order choose an ambiguous filename", () => {
@@ -50,10 +58,14 @@ describe("wikilink resolution", () => {
     expect(reverse("Источник.md", "Дубль")).toEqual({ state: "ambiguous" });
   });
 
+  test("encodes a Linux backslash filename as data in a Document route", () => {
+    expect(documentRoute("Раздел\\архив/C:\\Документ.md")).toBe(
+      "/documents/%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%5C%D0%B0%D1%80%D1%85%D0%B8%D0%B2/C%3A%5C%D0%94%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82.md",
+    );
+  });
+
   test.each([
     "../../private",
-    "C:\\private",
-    "folder\\private",
     "file:///private",
     "https://outside.example/private",
     "\0private",

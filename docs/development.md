@@ -46,8 +46,8 @@ The stable project interface is:
   initial install, enable, start, restart, and verify the persistent user
   service; later releases must use the safe deployment workflow;
 - `mise run deploy`: from one clean commit, run the complete gate, build and
-  isolate a candidate, activate it with brief restart downtime, verify it, and
-  automatically restore the preceding release on failure;
+  isolate a candidate, activate it with brief restart downtime, verify it
+  locally, and automatically restore the preceding release on failure;
 - `mise run deploy:rehearse-rollback`: inject a controlled post-activation
   failure and prove the preceding service becomes ready again;
 - `mise run deployment:status` and `mise run recover:deployment`: inspect or
@@ -83,7 +83,8 @@ orchestration to cover quality-gate, staging, candidate, activation, restart,
 readiness, post-check, interruption, rollback, locking, containment, and
 retention failures. Candidate and post-activation smoke additionally exercise
 the Home Document state, root catalog, search, and a one-byte material response.
-No deployment test or command configures Tailscale.
+The terminal deployment state is explicitly `locally-verified`; no deployment
+test or command configures Tailscale or completes the Issue #15 human checkpoint.
 
 ## Development data
 

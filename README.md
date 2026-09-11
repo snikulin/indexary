@@ -123,8 +123,8 @@ Install the pinned toolchain with `mise install`, then use the public task inter
 - `mise run install:service -- <release> <absolute-kb> [port]` installs and
   verifies the persistent user service;
 - `mise run deploy` runs the complete local gate, stages and smokes an isolated
-  candidate, accepts brief restart downtime, atomically activates it, and rolls
-  back automatically on failure;
+  candidate, accepts brief restart downtime, atomically activates it, verifies
+  the local service path, and rolls back automatically on failure;
 - `mise run deploy:rehearse-rollback` deliberately fails after activation to
   prove that the exact preceding release is restored and ready (successfully
   proving rollback still returns a nonzero command result);

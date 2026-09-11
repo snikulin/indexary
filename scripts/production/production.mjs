@@ -8,7 +8,6 @@ import {
   cp,
   lstat,
   mkdir,
-  open,
   readFile,
   readdir,
   readlink,
@@ -24,6 +23,16 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers";
 import { promisify } from "node:util";
+
+import {
+  fetchWithDeadline,
+  isContainedPath,
+  ProductionError,
+  requireAbsolutePath,
+  retryWithin,
+  syncDirectory,
+  writeAtomicFile,
+} from "./shared.mjs";
 
 const executeFile = promisify(execFile);
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
@@ -43,12 +52,7 @@ const SERVICE_PROFILE = "production";
 const RELEASE_ID_PATTERN = /^\d{8}T\d{9}Z-[0-9a-f]{12}$/;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 
-export class ProductionError extends Error {
-  constructor(message, options) {
-    super(message, options);
-    this.name = "ProductionError";
-  }
-}
+export { ProductionError } from "./shared.mjs";
 
 function requireSafeSingleLine(value, label) {
   if (value.includes("\0")) {
@@ -61,10 +65,7 @@ function requireSafeSingleLine(value, label) {
 
 function requireAbsolute(value, label) {
   requireSafeSingleLine(value, label);
-  if (!path.isAbsolute(value)) {
-    throw new ProductionError(`${label} must be absolute.`);
-  }
-  return path.resolve(value);
+  return requireAbsolutePath(value, label, `${label} must be absolute.`);
 }
 
 function xdgValue(environment, name, fallback) {
@@ -238,14 +239,6 @@ async function hashFile(file) {
   return hash.digest("hex");
 }
 
-function isContained(root, candidate) {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (!relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 async function collectPayloadEntries(root) {
   const result = [];
 
@@ -369,7 +362,7 @@ export async function validateRelease(releaseDirectory, expectedReleaseId) {
     }
     const link = path.join(release, entry.path);
     const resolved = await realpath(link).catch(() => undefined);
-    if (resolved === undefined || !isContained(release, resolved)) {
+    if (resolved === undefined || !isContainedPath(release, resolved)) {
       throw new ProductionError(
         "The release contains an external or broken dependency link.",
       );
@@ -392,19 +385,6 @@ export async function validateRelease(releaseDirectory, expectedReleaseId) {
   return manifest;
 }
 
-async function fsyncDirectory(directory) {
-  let handle;
-  try {
-    handle = await open(directory, "r");
-    await handle.sync();
-  } catch {
-    // A rename on the supported Linux filesystem is already atomic. Directory
-    // fsync is an additional durability measure where the filesystem permits it.
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
 export async function atomicSelectRelease(paths, releaseDirectory) {
   const releasesRoot = requireAbsolute(paths.releasesRoot, "Release root");
   const release = requireAbsolute(releaseDirectory, "Release directory");
@@ -424,7 +404,7 @@ export async function atomicSelectRelease(paths, releaseDirectory) {
   await symlink(target, temporaryLink);
   try {
     await rename(temporaryLink, paths.currentLink);
-    await fsyncDirectory(path.dirname(paths.currentLink));
+    await syncDirectory(path.dirname(paths.currentLink));
   } catch (error) {
     await rm(temporaryLink, { force: true });
     throw error;
@@ -432,15 +412,7 @@ export async function atomicSelectRelease(paths, releaseDirectory) {
 }
 
 async function writeAtomic(file, contents, mode) {
-  await mkdir(path.dirname(file), { recursive: true });
-  const temporary = path.join(
-    path.dirname(file),
-    `.${path.basename(file)}-${process.pid}-${randomUUID()}`,
-  );
-  await writeFile(temporary, contents, { mode, flag: "wx" });
-  await chmod(temporary, mode);
-  await rename(temporary, file);
-  await fsyncDirectory(path.dirname(file));
+  await writeAtomicFile(file, contents, { mode });
 }
 
 export async function runCommand(command, arguments_, options = {}) {
@@ -477,37 +449,18 @@ function parseProperties(output) {
 }
 
 async function fetchWithin(url, options = {}) {
-  try {
-    return await globalThis.fetch(url, {
-      ...options,
-      signal: globalThis.AbortSignal.timeout(2_000),
-      redirect: "error",
-    });
-  } catch (error) {
-    throw new ProductionError(
+  return fetchWithDeadline(url, {
+    ...options,
+    errorMessage:
       "The managed service did not answer a local verification request.",
-      {
-        cause: error,
-      },
-    );
-  }
+  });
 }
 
 async function eventually(action, timeoutMilliseconds = 60_000) {
-  const deadline = Date.now() + timeoutMilliseconds;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      return await action();
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  throw (
-    lastError ??
-    new ProductionError("A bounded production verification timed out.")
-  );
+  return retryWithin(action, {
+    timeoutMilliseconds,
+    timeoutMessage: "A bounded production verification timed out.",
+  });
 }
 
 async function readJsonResponse(url, expectedStatus = 200) {
@@ -1097,7 +1050,7 @@ export async function buildImmutableRelease(options = {}) {
     await chmod(staging, 0o555);
     await validateRelease(staging, releaseId);
     await rename(staging, destination);
-    await fsyncDirectory(paths.releasesRoot);
+    await syncDirectory(paths.releasesRoot);
     return { releaseDirectory: destination, manifest };
   } catch (error) {
     await makeTreeRemovable(staging);
@@ -1285,14 +1238,14 @@ async function verifyLocalApplication(port, requireReady) {
       !requireReady &&
       readyResponse.status === 503 &&
       ready?.status === "not-ready" &&
-      ready?.reason === "home-document-unavailable"
+      ready?.reason === "knowledge-base-unavailable"
     ) {
-      readiness = "home-document-unavailable";
+      readiness = "knowledge-base-unavailable";
     } else {
       throw new ProductionError(
         requireReady
           ? "The release did not become ready."
-          : "The release did not reach a stable Home Document state.",
+          : "The release did not reach a stable startup state.",
       );
     }
     const root = await fetchWithin(`${base}/`);

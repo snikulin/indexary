@@ -21,12 +21,10 @@ function safeTarget(target: string): string | undefined {
   if (
     value === "" ||
     value.includes("\0") ||
-    value.includes("\\") ||
     [...value].some((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
       return codePoint <= 31 || codePoint === 127;
-    }) ||
-    /^[a-zA-Z]:/.test(value)
+    })
   ) {
     return undefined;
   }

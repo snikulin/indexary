@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import {
@@ -17,13 +18,15 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { URL } from "node:url";
+import { pathToFileURL, URL } from "node:url";
 
 import {
   acquireDeploymentLock,
   deployRelease,
   deploymentStatus,
   pruneSuccessfulReleases,
+  readLinuxProcessIdentity,
+  readDeploymentTransaction,
   recoverDeployment,
   resolveCurrentRelease,
   verifyDeploymentApplication,
@@ -210,10 +213,15 @@ function fakeDependencies(candidate, events, overrides = {}) {
       events.push("release-built");
       return candidate;
     },
-    verifyCandidate: async ({ cacheRoot, port }) => {
+    verifyCandidate: async ({ cacheRoot, port, onStarted }) => {
       events.push("candidate-smoke");
       assert.match(cacheRoot, /deployment-candidates\/candidate-/);
       assert.equal(port, 49_123);
+      await onStarted?.({
+        pid: 999_999_991,
+        processGroupId: 999_999_991,
+        startTimeTicks: "1",
+      });
     },
     unusedLoopbackPort: async () => 49_123,
     verifyManagedService: async () => {
@@ -269,7 +277,7 @@ test("deployment gates, isolates, activates, verifies, records, and retains thre
     fakeDependencies(candidate, events),
   );
 
-  assert.equal(result.status, "verified");
+  assert.equal(result.status, "locally-verified");
   assert.equal(result.releaseId, candidate.manifest.releaseId);
   assert.equal(
     await readlink(paths.currentLink),
@@ -285,7 +293,8 @@ test("deployment gates, isolates, activates, verifies, records, and retains thre
   const transaction = JSON.parse(
     await readFile(path.join(paths.stateRoot, "deployment.json"), "utf8"),
   );
-  assert.equal(transaction.status, "verified");
+  assert.equal(transaction.schemaVersion, 2);
+  assert.equal(transaction.status, "locally-verified");
   assert.equal(transaction.previousReleaseId, previous.manifest.releaseId);
   assert.equal(transaction.candidateReleaseId, candidate.manifest.releaseId);
   assert.ok(events.indexOf("quality-gate") < events.indexOf("release-built"));
@@ -296,7 +305,7 @@ test("deployment gates, isolates, activates, verifies, records, and retains thre
   assert.ok(
     events.indexOf("service-restart") < events.indexOf("managed-ready"),
   );
-  assert.equal(events.includes("deployment-verified"), true);
+  assert.equal(events.includes("deployment-locally-verified"), true);
   assert.equal((await stat(paths.environmentFile)).mode & 0o777, 0o600);
 });
 
@@ -668,4 +677,278 @@ test("release selection and pruning reject external symbolic-link targets", asyn
     /non-directory target/,
   );
   assert.equal((await stat(outside)).isDirectory(), true);
+});
+
+async function waitForJson(file, timeoutMilliseconds = 5_000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    try {
+      return JSON.parse(await readFile(file, "utf8"));
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 20));
+    }
+  }
+  throw new Error("Timed out waiting for process identity.");
+}
+
+async function writeInterruptedTransaction(
+  paths,
+  {
+    previousReleaseId,
+    candidateReleaseId,
+    candidateProcess,
+    candidateCachePath,
+  },
+) {
+  await writeFile(
+    path.join(paths.stateRoot, "deployment.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      transactionId: "11111111-1111-1111-1111-111111111111",
+      status:
+        candidateProcess === null ? "candidate-starting" : "candidate-running",
+      previousReleaseId,
+      candidateReleaseId,
+      startedAt: "2026-09-11T12:00:00.000Z",
+      updatedAt: "2026-09-11T12:00:00.000Z",
+      rehearsal: false,
+      candidateProcess,
+      candidatePort: 49_124,
+      candidateCachePath,
+    })}\n`,
+    { mode: 0o600 },
+  );
+}
+
+test("candidate smoke persists PID identity, port, and cache before verification", async (context) => {
+  const { root, paths, candidate } = await setupDeployment(
+    context,
+    "indexary-candidate-state-",
+  );
+  const events = [];
+  let recorded;
+  const dependencies = fakeDependencies(candidate, events, {
+    verifyCandidate: async ({ cacheRoot, port, onStarted }) => {
+      const identity = {
+        pid: 999_999_991,
+        processGroupId: 999_999_991,
+        startTimeTicks: "123",
+      };
+      await onStarted(identity);
+      recorded = JSON.parse(
+        await readFile(path.join(paths.stateRoot, "deployment.json"), "utf8"),
+      );
+      assert.equal(recorded.status, "candidate-running");
+      assert.deepEqual(recorded.candidateProcess, identity);
+      assert.equal(recorded.candidatePort, port);
+      assert.equal(recorded.candidateCachePath, cacheRoot);
+    },
+  });
+
+  await deployRelease({ paths, sourceRoot: root }, dependencies);
+
+  assert.notEqual(recorded, undefined);
+});
+
+test("real SIGKILL leaves a recorded candidate that recovery safely stops and cleans", async (context) => {
+  const { paths, previous, candidate, knowledgeBase } = await setupDeployment(
+    context,
+    "indexary-candidate-sigkill-",
+  );
+  const candidateCacheRoot = path.join(
+    paths.cacheRoot,
+    "indexary",
+    "deployment-candidates",
+  );
+  const candidateCachePath = path.join(candidateCacheRoot, "candidate-sigkill");
+  await mkdir(candidateCachePath, { recursive: true });
+  await writeFile(path.join(candidateCachePath, "derived-data"), "disposable");
+
+  const runnableRelease = path.join(path.dirname(paths.dataRoot), "runnable");
+  await mkdir(path.join(runnableRelease, "runtime/bin"), { recursive: true });
+  await mkdir(path.join(runnableRelease, "app"), { recursive: true });
+  await symlink(
+    process.execPath,
+    path.join(runnableRelease, "runtime/bin/node"),
+  );
+  await writeFile(
+    path.join(runnableRelease, "app/server.mjs"),
+    'process.on("SIGTERM", () => process.exit(0)); setInterval(() => {}, 1000);\n',
+  );
+  const identityFile = path.join(path.dirname(paths.dataRoot), "identity.json");
+  const deploymentModule = pathToFileURL(
+    path.join(import.meta.dirname, "deployment.mjs"),
+  ).href;
+  const driverSource = `
+    import { writeFile } from "node:fs/promises";
+    import { verifyCandidateRelease } from ${JSON.stringify(deploymentModule)};
+    const [releaseDirectory, knowledgeBasePath, cacheRoot, identityFile] = process.argv.slice(1);
+    await verifyCandidateRelease({
+      releaseDirectory,
+      manifest: { application: { server: "app/server.mjs" } },
+      knowledgeBasePath,
+      cacheRoot,
+      port: 49124,
+      onStarted: (identity) => writeFile(identityFile, JSON.stringify(identity)),
+    }, async () => new Promise(() => {}));
+  `;
+  const driver = spawn(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      driverSource,
+      runnableRelease,
+      knowledgeBase,
+      candidateCachePath,
+      identityFile,
+    ],
+    { stdio: "ignore" },
+  );
+  let candidateIdentity;
+  context.after(async () => {
+    if (driver.exitCode === null) {
+      driver.kill("SIGKILL");
+    }
+    if (candidateIdentity !== undefined) {
+      const actual = await readLinuxProcessIdentity(candidateIdentity.pid);
+      if (
+        actual?.startTimeTicks === candidateIdentity.startTimeTicks &&
+        actual.processGroupId === candidateIdentity.processGroupId
+      ) {
+        process.kill(-candidateIdentity.processGroupId, "SIGKILL");
+      }
+    }
+  });
+  candidateIdentity = await waitForJson(identityFile);
+  assert.deepEqual(
+    await readLinuxProcessIdentity(candidateIdentity.pid),
+    candidateIdentity,
+  );
+  await writeInterruptedTransaction(paths, {
+    previousReleaseId: previous.manifest.releaseId,
+    candidateReleaseId: candidate.manifest.releaseId,
+    candidateProcess: candidateIdentity,
+    candidateCachePath,
+  });
+
+  process.kill(driver.pid, "SIGKILL");
+  await new Promise((resolve) => driver.once("close", resolve));
+  assert.deepEqual(
+    await readLinuxProcessIdentity(candidateIdentity.pid),
+    candidateIdentity,
+  );
+  const result = await recoverDeployment(
+    paths,
+    fakeDependencies(candidate, []),
+  );
+
+  assert.equal(result.status, "rolled-back");
+  assert.equal(
+    await readLinuxProcessIdentity(candidateIdentity.pid),
+    undefined,
+  );
+  assert.equal(
+    await lstat(candidateCachePath).catch(() => undefined),
+    undefined,
+  );
+});
+
+test("recovery neither kills a PID with a reused identity nor removes an unvalidated cache", async (context) => {
+  const { root, paths, previous, candidate } = await setupDeployment(
+    context,
+    "indexary-candidate-identity-",
+  );
+  const sentinel = spawn(
+    process.execPath,
+    ["--eval", "setInterval(() => {}, 1000)"],
+    {
+      detached: true,
+      stdio: "ignore",
+    },
+  );
+  assert.notEqual(sentinel.pid, undefined);
+  const sentinelIdentity = await readLinuxProcessIdentity(sentinel.pid);
+  assert.notEqual(sentinelIdentity, undefined);
+  context.after(async () => {
+    const actual = await readLinuxProcessIdentity(sentinel.pid);
+    if (actual?.startTimeTicks === sentinelIdentity.startTimeTicks) {
+      process.kill(-sentinelIdentity.processGroupId, "SIGKILL");
+    }
+  });
+  sentinel.unref();
+  const validCacheRoot = path.join(
+    paths.cacheRoot,
+    "indexary",
+    "deployment-candidates",
+  );
+  const validCache = path.join(validCacheRoot, "candidate-reused");
+  await mkdir(validCache, { recursive: true });
+  await writeInterruptedTransaction(paths, {
+    previousReleaseId: previous.manifest.releaseId,
+    candidateReleaseId: candidate.manifest.releaseId,
+    candidateProcess: {
+      ...sentinelIdentity,
+      startTimeTicks: String(BigInt(sentinelIdentity.startTimeTicks) + 1n),
+    },
+    candidateCachePath: validCache,
+  });
+
+  await recoverDeployment(paths, fakeDependencies(candidate, []));
+
+  assert.deepEqual(
+    await readLinuxProcessIdentity(sentinel.pid),
+    sentinelIdentity,
+  );
+  assert.equal(await lstat(validCache).catch(() => undefined), undefined);
+
+  const outside = path.join(root, "outside-candidate-cache");
+  await mkdir(outside);
+  await writeFile(path.join(outside, "keep"), "keep");
+  await writeInterruptedTransaction(paths, {
+    previousReleaseId: previous.manifest.releaseId,
+    candidateReleaseId: candidate.manifest.releaseId,
+    candidateProcess: null,
+    candidateCachePath: outside,
+  });
+  await assert.rejects(
+    () => recoverDeployment(paths, fakeDependencies(candidate, [])),
+    /Automatic rollback failed/,
+  );
+  assert.equal(await readFile(path.join(outside, "keep"), "utf8"), "keep");
+});
+
+test("legacy verified transaction state is read as locally verified", async (context) => {
+  const { paths, previous, candidate } = await setupDeployment(
+    context,
+    "indexary-legacy-transaction-",
+  );
+  await writeFile(
+    path.join(paths.stateRoot, "deployment.json"),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      transactionId: "11111111-1111-1111-1111-111111111111",
+      status: "verified",
+      previousReleaseId: previous.manifest.releaseId,
+      candidateReleaseId: candidate.manifest.releaseId,
+      startedAt: "2026-09-11T12:00:00.000Z",
+      updatedAt: "2026-09-11T12:00:00.000Z",
+      rehearsal: false,
+    })}\n`,
+    { mode: 0o600 },
+  );
+
+  assert.equal(
+    (await readDeploymentTransaction(paths)).status,
+    "locally-verified",
+  );
+  assert.deepEqual(await deploymentStatus(paths), {
+    status: "locally-verified",
+    previousReleaseId: previous.manifest.releaseId,
+    candidateReleaseId: candidate.manifest.releaseId,
+    action: "mise run deploy",
+  });
 });

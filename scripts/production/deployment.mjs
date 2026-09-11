@@ -11,9 +11,7 @@ import {
   readdir,
   readlink,
   realpath,
-  rename,
   rm,
-  writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -34,14 +32,40 @@ import {
   validateRelease,
   verifyManagedService,
 } from "./production.mjs";
+import {
+  fetchWithDeadline,
+  isContainedPath,
+  requireAbsolutePath,
+  retryWithin,
+  syncDirectory,
+  writeAtomicFile,
+} from "./shared.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
-const TRANSACTION_SCHEMA_VERSION = 1;
+const TRANSACTION_SCHEMA_VERSION = 2;
 const HISTORY_SCHEMA_VERSION = 1;
 const RELEASE_ID_PATTERN = /^\d{8}T\d{9}Z-[0-9a-f]{12}$/;
 const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
-const TERMINAL_TRANSACTION_STATUSES = new Set(["rolled-back", "verified"]);
+const TERMINAL_TRANSACTION_STATUSES = new Set([
+  "rolled-back",
+  "locally-verified",
+]);
 const TRANSACTION_STATUSES = new Set([
+  "checking",
+  "staging",
+  "staged",
+  "candidate-starting",
+  "candidate-running",
+  "candidate-verified",
+  "activating",
+  "activated",
+  "verifying",
+  "locally-verified",
+  "rolling-back",
+  "rolled-back",
+  "rollback-failed",
+]);
+const LEGACY_TRANSACTION_STATUSES = new Set([
   "checking",
   "staging",
   "staged",
@@ -56,16 +80,7 @@ const TRANSACTION_STATUSES = new Set([
 ]);
 
 function requireAbsolute(value, label) {
-  if (
-    typeof value !== "string" ||
-    value.includes("\0") ||
-    value.includes("\n") ||
-    value.includes("\r") ||
-    !path.isAbsolute(value)
-  ) {
-    throw new ProductionError(`${label} must be an absolute single-line path.`);
-  }
-  return path.resolve(value);
+  return requireAbsolutePath(value, label);
 }
 
 function transactionPath(paths) {
@@ -80,43 +95,34 @@ function lockPath(paths) {
   return path.join(paths.stateRoot, "deployment.lock");
 }
 
-async function fsyncDirectory(directory) {
-  let handle;
-  try {
-    handle = await open(directory, "r");
-    await handle.sync();
-  } catch {
-    // Atomic rename is the primary guarantee; directory fsync adds durability
-    // on filesystems that permit syncing directory handles.
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-}
-
 async function writeAtomic(file, contents, mode = 0o600) {
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = path.join(
-    path.dirname(file),
-    `.${path.basename(file)}-${process.pid}-${randomUUID()}`,
-  );
-  await writeFile(temporary, contents, { mode, flag: "wx" });
-  await chmod(temporary, mode);
-  await rename(temporary, file);
-  await fsyncDirectory(path.dirname(file));
+  await writeAtomicFile(file, contents, { mode, directoryMode: 0o700 });
 }
 
 function validReleaseId(value) {
   return typeof value === "string" && RELEASE_ID_PATTERN.test(value);
 }
 
-function validTransaction(value) {
+function validCandidateProcess(value) {
+  return (
+    value === null ||
+    (value !== null &&
+      typeof value === "object" &&
+      Number.isSafeInteger(value.pid) &&
+      value.pid > 0 &&
+      value.processGroupId === value.pid &&
+      typeof value.startTimeTicks === "string" &&
+      /^[1-9]\d*$/.test(value.startTimeTicks))
+  );
+}
+
+function validTransactionBase(value, statuses) {
   return (
     value !== null &&
     typeof value === "object" &&
-    value.schemaVersion === TRANSACTION_SCHEMA_VERSION &&
     typeof value.transactionId === "string" &&
     /^[0-9a-f-]{36}$/.test(value.transactionId) &&
-    TRANSACTION_STATUSES.has(value.status) &&
+    statuses.has(value.status) &&
     validReleaseId(value.previousReleaseId) &&
     (value.candidateReleaseId === null ||
       validReleaseId(value.candidateReleaseId)) &&
@@ -126,6 +132,55 @@ function validTransaction(value) {
     !Number.isNaN(Date.parse(value.updatedAt)) &&
     typeof value.rehearsal === "boolean"
   );
+}
+
+function normalizeTransaction(value) {
+  if (
+    value?.schemaVersion === 1 &&
+    validTransactionBase(value, LEGACY_TRANSACTION_STATUSES)
+  ) {
+    return {
+      ...value,
+      schemaVersion: TRANSACTION_SCHEMA_VERSION,
+      status: value.status === "verified" ? "locally-verified" : value.status,
+      candidateProcess: null,
+      candidatePort: null,
+      candidateCachePath: null,
+    };
+  }
+  if (
+    value?.schemaVersion === TRANSACTION_SCHEMA_VERSION &&
+    validTransactionBase(value, TRANSACTION_STATUSES) &&
+    validCandidateProcess(value.candidateProcess) &&
+    (value.candidatePort === null ||
+      (Number.isSafeInteger(value.candidatePort) &&
+        value.candidatePort >= 1 &&
+        value.candidatePort <= 65_535)) &&
+    (value.candidateCachePath === null ||
+      (typeof value.candidateCachePath === "string" &&
+        path.isAbsolute(value.candidateCachePath) &&
+        !/[\0\n\r]/.test(value.candidateCachePath))) &&
+    validCandidateState(value)
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function validCandidateState(value) {
+  const hasCache = value.candidateCachePath !== null;
+  const hasPort = value.candidatePort !== null;
+  const hasProcess = value.candidateProcess !== null;
+  if (value.status === "candidate-starting") {
+    return hasCache && hasPort && !hasProcess;
+  }
+  if (value.status === "candidate-running") {
+    return hasCache && hasPort && hasProcess;
+  }
+  if (value.status === "rolling-back" || value.status === "rollback-failed") {
+    return hasCache === hasPort && (!hasProcess || hasCache);
+  }
+  return !hasCache && !hasPort && !hasProcess;
 }
 
 export async function readDeploymentTransaction(paths = resolveXdgPaths()) {
@@ -141,12 +196,13 @@ export async function readDeploymentTransaction(paths = resolveXdgPaths()) {
       { cause: error },
     );
   }
-  if (!validTransaction(parsed)) {
+  const normalized = normalizeTransaction(parsed);
+  if (normalized === undefined) {
     throw new ProductionError(
       "Deployment transaction state is invalid; run `mise run recover:deployment`.",
     );
   }
-  return parsed;
+  return normalized;
 }
 
 async function writeTransaction(paths, transaction, status, updates = {}) {
@@ -172,6 +228,172 @@ function pidIsRunning(pid) {
     return true;
   } catch (error) {
     return error?.code === "EPERM";
+  }
+}
+
+export async function readLinuxProcessIdentity(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return undefined;
+  }
+  let contents;
+  try {
+    contents = await readFile(`/proc/${pid}/stat`, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ESRCH") {
+      return undefined;
+    }
+    throw new ProductionError("Candidate process identity is unavailable.", {
+      cause: error,
+    });
+  }
+  const commandEnd = contents.lastIndexOf(") ");
+  if (commandEnd === -1) {
+    throw new ProductionError("Candidate process identity is invalid.");
+  }
+  const fields = contents
+    .slice(commandEnd + 2)
+    .trim()
+    .split(/\s+/);
+  if (fields[0] === "Z") {
+    return undefined;
+  }
+  const processGroupId = Number(fields[2]);
+  const startTimeTicks = fields[19];
+  if (
+    !Number.isSafeInteger(processGroupId) ||
+    processGroupId <= 0 ||
+    startTimeTicks === undefined ||
+    !/^[1-9]\d*$/.test(startTimeTicks)
+  ) {
+    throw new ProductionError("Candidate process identity is invalid.");
+  }
+  return { pid, processGroupId, startTimeTicks };
+}
+
+function sameProcessIdentity(expected, actual) {
+  return (
+    actual !== undefined &&
+    actual.pid === expected.pid &&
+    actual.processGroupId === expected.processGroupId &&
+    actual.startTimeTicks === expected.startTimeTicks
+  );
+}
+
+async function waitForRecordedProcessToEnd(identity, timeoutMilliseconds) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    if (
+      !sameProcessIdentity(
+        identity,
+        await readLinuxProcessIdentity(identity.pid),
+      )
+    ) {
+      return true;
+    }
+    await delay(50);
+  }
+  return false;
+}
+
+async function stopRecordedCandidateProcess(identity) {
+  const actual = await readLinuxProcessIdentity(identity.pid);
+  if (!sameProcessIdentity(identity, actual)) {
+    return;
+  }
+  if (actual.processGroupId !== actual.pid) {
+    throw new ProductionError(
+      "Recorded candidate process group identity is invalid.",
+    );
+  }
+  try {
+    process.kill(-actual.processGroupId, "SIGTERM");
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw new ProductionError(
+        "Candidate process group could not be stopped.",
+        {
+          cause: error,
+        },
+      );
+    }
+  }
+  if (await waitForRecordedProcessToEnd(identity, 20_000)) {
+    return;
+  }
+  const beforeKill = await readLinuxProcessIdentity(identity.pid);
+  if (!sameProcessIdentity(identity, beforeKill)) {
+    return;
+  }
+  try {
+    process.kill(-identity.processGroupId, "SIGKILL");
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw new ProductionError(
+        "Candidate process group could not be killed.",
+        {
+          cause: error,
+        },
+      );
+    }
+  }
+  if (!(await waitForRecordedProcessToEnd(identity, 2_000))) {
+    throw new ProductionError("Candidate process group did not stop.");
+  }
+}
+
+function configuredCandidateCacheRoot(paths) {
+  return path.join(paths.cacheRoot, "indexary", "deployment-candidates");
+}
+
+async function createCandidateCache(paths) {
+  const configuredRoot = configuredCandidateCacheRoot(paths);
+  await mkdir(configuredRoot, { recursive: true, mode: 0o700 });
+  const canonicalRoot = await realpath(configuredRoot);
+  return mkdtemp(path.join(canonicalRoot, "candidate-"));
+}
+
+async function removeValidatedCandidateCache(paths, candidateCachePath) {
+  const candidate = requireAbsolute(candidateCachePath, "Candidate cache path");
+  if (!/^candidate-[A-Za-z0-9]+$/.test(path.basename(candidate))) {
+    throw new ProductionError("Recorded candidate cache path is invalid.");
+  }
+  const canonicalRoot = await realpath(
+    configuredCandidateCacheRoot(paths),
+  ).catch((error) => {
+    if (error?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  const metadata = await lstat(candidate).catch((error) => {
+    if (error?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (metadata === undefined) {
+    return;
+  }
+  if (
+    canonicalRoot === undefined ||
+    path.dirname(candidate) !== canonicalRoot ||
+    !isContainedPath(canonicalRoot, candidate) ||
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    (await realpath(candidate)) !== candidate
+  ) {
+    throw new ProductionError("Recorded candidate cache path is invalid.");
+  }
+  await rm(candidate, { recursive: true });
+  await syncDirectory(canonicalRoot);
+}
+
+async function cleanCandidateArtifacts(paths, transaction) {
+  if (transaction.candidateProcess !== null) {
+    await stopRecordedCandidateProcess(transaction.candidateProcess);
+  }
+  if (transaction.candidateCachePath !== null) {
+    await removeValidatedCandidateCache(paths, transaction.candidateCachePath);
   }
 }
 
@@ -207,7 +429,7 @@ export async function acquireDeploymentLock(paths = resolveXdgPaths()) {
         }
         if (owner.nonce === nonce) {
           await rm(file, { force: true });
-          await fsyncDirectory(paths.stateRoot);
+          await syncDirectory(paths.stateRoot);
         }
       };
     } catch (error) {
@@ -305,40 +527,26 @@ async function updateInstalledRelease(paths, configuration, releaseId) {
 }
 
 async function fetchWithin(url, options = {}) {
-  try {
-    return await globalThis.fetch(url, {
-      ...options,
-      redirect: "error",
-      signal: globalThis.AbortSignal.timeout(2_000),
-    });
-  } catch (error) {
-    throw new ProductionError(
+  return fetchWithDeadline(url, {
+    ...options,
+    errorMessage:
       "The deployment smoke did not receive a local application response.",
-      { cause: error },
-    );
-  }
+  });
 }
 
 async function eventually(action, isInterrupted, timeoutMilliseconds = 60_000) {
-  const deadline = Date.now() + timeoutMilliseconds;
-  let lastError;
-  while (Date.now() < deadline) {
-    const signal = isInterrupted?.();
-    if (signal) {
-      throw new ProductionError(
-        `Deployment interrupted by ${signal}; automatic recovery is required.`,
-      );
-    }
-    try {
-      return await action();
-    } catch (error) {
-      lastError = error;
-      await delay(100);
-    }
-  }
-  throw (
-    lastError ?? new ProductionError("A bounded deployment check timed out.")
-  );
+  return retryWithin(action, {
+    timeoutMilliseconds,
+    timeoutMessage: "A bounded deployment check timed out.",
+    beforeAttempt: () => {
+      const signal = isInterrupted?.();
+      if (signal) {
+        throw new ProductionError(
+          `Deployment interrupted by ${signal}; automatic recovery is required.`,
+        );
+      }
+    },
+  });
 }
 
 async function responseJson(response, message) {
@@ -670,12 +878,16 @@ async function waitForChildExit(child, timeoutMilliseconds) {
   ]);
 }
 
-async function stopCandidateProcessGroup(child) {
+async function stopCandidateProcessGroup(child, identity) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return { code: child.exitCode, signal: child.signalCode };
   }
+  const actual = await readLinuxProcessIdentity(identity.pid);
+  if (!sameProcessIdentity(identity, actual)) {
+    return waitForChildExit(child, 2_000);
+  }
   try {
-    process.kill(-child.pid, "SIGTERM");
+    process.kill(-identity.processGroupId, "SIGTERM");
   } catch (error) {
     if (error?.code !== "ESRCH") {
       throw error;
@@ -683,8 +895,12 @@ async function stopCandidateProcessGroup(child) {
   }
   let exit = await waitForChildExit(child, 20_000);
   if (exit === undefined) {
+    const beforeKill = await readLinuxProcessIdentity(identity.pid);
+    if (!sameProcessIdentity(identity, beforeKill)) {
+      return waitForChildExit(child, 2_000);
+    }
     try {
-      process.kill(-child.pid, "SIGKILL");
+      process.kill(-identity.processGroupId, "SIGKILL");
     } catch (error) {
       if (error?.code !== "ESRCH") {
         throw error;
@@ -706,6 +922,7 @@ export async function verifyCandidateRelease(
     cacheRoot,
     port,
     isInterrupted,
+    onStarted,
   },
   applicationVerifier = verifyDeploymentApplication,
 ) {
@@ -734,12 +951,27 @@ export async function verifyCandidateRelease(
   }
 
   let verificationError;
+  let identity;
   try {
+    if (child.pid === undefined) {
+      throw new ProductionError("The isolated candidate did not start.");
+    }
+    identity = await readLinuxProcessIdentity(child.pid);
+    if (identity === undefined || identity.processGroupId !== identity.pid) {
+      throw new ProductionError(
+        "The isolated candidate process identity is invalid.",
+      );
+    }
+    await onStarted?.(identity);
     await applicationVerifier(port, { isInterrupted });
   } catch (error) {
     verificationError = error;
   }
-  const exit = await stopCandidateProcessGroup(child).catch((error) => {
+  const exit = await (
+    identity === undefined
+      ? waitForChildExit(child, 2_000)
+      : stopCandidateProcessGroup(child, identity)
+  ).catch((error) => {
     verificationError ??= error;
     return undefined;
   });
@@ -795,6 +1027,12 @@ async function restorePreviousRelease(
   let current = transaction;
   try {
     current = await writeTransaction(paths, current, "rolling-back");
+    await cleanCandidateArtifacts(paths, current);
+    current = await writeTransaction(paths, current, "rolling-back", {
+      candidateProcess: null,
+      candidatePort: null,
+      candidateCachePath: null,
+    });
     const previousDirectory = path.join(
       paths.releasesRoot,
       current.previousReleaseId,
@@ -1016,7 +1254,7 @@ export async function pruneSuccessfulReleases(
     await rm(candidate, { recursive: true });
     pruned.push(entry.name);
   }
-  await fsyncDirectory(paths.releasesRoot);
+  await syncDirectory(paths.releasesRoot);
   return { retained: [...retained], pruned };
 }
 
@@ -1078,6 +1316,9 @@ export async function deployRelease(
         startedAt,
         updatedAt: startedAt,
         rehearsal: rehearseRollback,
+        candidateProcess: null,
+        candidatePort: null,
+        candidateCachePath: null,
       },
       "checking",
     );
@@ -1126,14 +1367,17 @@ export async function deployRelease(
     await phase("after-staging");
     checkInterrupted(isInterrupted);
 
-    const candidateCacheRoot = path.join(
-      paths.cacheRoot,
-      "indexary",
-      "deployment-candidates",
-    );
-    await mkdir(candidateCacheRoot, { recursive: true, mode: 0o700 });
-    candidateCache = await mkdtemp(path.join(candidateCacheRoot, "candidate-"));
+    candidateCache = await createCandidateCache(paths);
     const candidatePort = await portAllocator();
+    transaction = await writeTransaction(
+      paths,
+      transaction,
+      "candidate-starting",
+      {
+        candidateCachePath: candidateCache,
+        candidatePort,
+      },
+    );
     await candidateVerifier(
       {
         releaseDirectory: built.releaseDirectory,
@@ -1142,13 +1386,33 @@ export async function deployRelease(
         cacheRoot: candidateCache,
         port: candidatePort,
         isInterrupted,
+        onStarted: async (identity) => {
+          if (!validCandidateProcess(identity) || identity === null) {
+            throw new ProductionError(
+              "The candidate process identity is invalid.",
+            );
+          }
+          transaction = await writeTransaction(
+            paths,
+            transaction,
+            "candidate-running",
+            { candidateProcess: identity },
+          );
+        },
       },
       dependencies.verifyApplication ?? verifyDeploymentApplication,
     );
+    await removeValidatedCandidateCache(paths, candidateCache);
+    candidateCache = undefined;
     transaction = await writeTransaction(
       paths,
       transaction,
       "candidate-verified",
+      {
+        candidateProcess: null,
+        candidatePort: null,
+        candidateCachePath: null,
+      },
     );
     dependencies.report?.({ event: "candidate-smoke-passed" });
     checkInterrupted(isInterrupted);
@@ -1212,13 +1476,17 @@ export async function deployRelease(
       built.manifest.releaseId,
       nextHistory,
     );
-    transaction = await writeTransaction(paths, transaction, "verified");
+    transaction = await writeTransaction(
+      paths,
+      transaction,
+      "locally-verified",
+    );
     dependencies.report?.({
-      event: "deployment-verified",
+      event: "deployment-locally-verified",
       releaseId: built.manifest.releaseId,
     });
     return {
-      status: "verified",
+      status: "locally-verified",
       releaseId: built.manifest.releaseId,
       previousReleaseId: previous.releaseId,
       retention,
@@ -1237,7 +1505,7 @@ export async function deployRelease(
     }
   } finally {
     if (candidateCache !== undefined) {
-      await rm(candidateCache, { recursive: true, force: true }).catch(
+      await removeValidatedCandidateCache(paths, candidateCache).catch(
         () => undefined,
       );
     }

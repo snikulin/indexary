@@ -47,13 +47,28 @@ interface DrawerState {
   context: boolean;
 }
 
-const contextSections = [
-  ru.sources,
-  ru.outgoingLinks,
-  ru.backlinks,
-  ru.attachments,
-  ru.properties,
-] as const;
+export type ContextSectionId =
+  | "source-materials"
+  | "outgoing-links"
+  | "backlinks"
+  | "attachments"
+  | "properties";
+
+const contextSections: readonly ContextSectionId[] = [
+  "source-materials",
+  "outgoing-links",
+  "backlinks",
+  "attachments",
+  "properties",
+];
+
+const contextSectionLabels: Record<ContextSectionId, string> = {
+  "source-materials": ru.sources,
+  "outgoing-links": ru.outgoingLinks,
+  backlinks: ru.backlinks,
+  attachments: ru.attachments,
+  properties: ru.properties,
+};
 
 function parentFolder(itemPath: string): string {
   const segments = itemPath.split("/");
@@ -513,20 +528,19 @@ function Context({
     enabled: documentPath !== undefined,
     retry: false,
   });
-  const [activeSection, setActiveSection] = useState<
-    (typeof contextSections)[number]
-  >(ru.properties);
+  const [activeSection, setActiveSection] =
+    useState<ContextSectionId>("properties");
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>();
 
   useEffect(() => {
-    setActiveSection(ru.properties);
+    setActiveSection("properties");
     setSelectedMaterialId(undefined);
   }, [documentPath]);
 
   const materialKind =
-    activeSection === ru.sources
+    activeSection === "source-materials"
       ? "sourceMaterials"
-      : activeSection === ru.attachments
+      : activeSection === "attachments"
         ? "attachments"
         : undefined;
   const materials =
@@ -536,9 +550,8 @@ function Context({
   const selectedMaterial =
     materials.find((material) => material.id === selectedMaterialId) ??
     materials[0];
-  const activeIndex = contextSections.indexOf(activeSection);
-  const activeTabId = `${tabsId}-tab-${activeIndex}`;
-  const activePanelId = `${tabsId}-panel-${activeIndex}`;
+  const activeTabId = `${tabsId}-tab-${activeSection}`;
+  const activePanelId = `${tabsId}-panel-${activeSection}`;
 
   function selectTab(index: number) {
     const section = contextSections[index];
@@ -600,12 +613,12 @@ function Context({
                 tabRefs.current[index] = element;
               }}
               key={section}
-              id={`${tabsId}-tab-${index}`}
+              id={`${tabsId}-tab-${section}`}
               className={section === activeSection ? "selected" : ""}
               type="button"
               role="tab"
               aria-selected={section === activeSection}
-              aria-controls={`${tabsId}-panel-${index}`}
+              aria-controls={`${tabsId}-panel-${section}`}
               tabIndex={section === activeSection ? 0 : -1}
               onClick={() => {
                 setActiveSection(section);
@@ -613,7 +626,7 @@ function Context({
               }}
               onKeyDown={(event) => handleTabKeyDown(event, index)}
             >
-              {section}
+              {contextSectionLabels[section]}
             </button>
           ))}
         </div>
@@ -645,7 +658,7 @@ function Context({
           <MaterialPanel
             documentPath={documentQuery.data.path}
             revision={documentQuery.data.revision}
-            heading={activeSection}
+            heading={contextSectionLabels[activeSection]}
             materials={materials}
             selected={selectedMaterial}
             select={setSelectedMaterialId}
@@ -795,11 +808,11 @@ function ContextSection({
   labelledBy,
 }: {
   document: DocumentRepresentation;
-  section: string;
+  section: ContextSectionId;
   panelId: string;
   labelledBy: string;
 }) {
-  if (section === ru.outgoingLinks) {
+  if (section === "outgoing-links") {
     return (
       <section
         id={panelId}
@@ -831,7 +844,7 @@ function ContextSection({
     );
   }
 
-  if (section === ru.backlinks) {
+  if (section === "backlinks") {
     return (
       <section
         id={panelId}

@@ -82,6 +82,41 @@ test("browses nested Cyrillic paths with direct routes and browser history", asy
   ).toBeVisible();
 });
 
+test("browses and directly opens a legal Linux filename containing backslash", async ({
+  page,
+}) => {
+  const documentName = "Маршрут\\2026.md";
+  const documentPath = path.join(fixtureRoot, documentName);
+  try {
+    await writeFile(documentPath, "# Обратная косая черта\n");
+    await page.goto("/folders");
+    const link = page
+      .getByRole("main")
+      .getByRole("link", { name: "Обратная косая черта" });
+    await expect(link).toBeVisible({ timeout: 2_000 });
+    await link.click();
+    await expect(page).toHaveURL(
+      "/documents/%D0%9C%D0%B0%D1%80%D1%88%D1%80%D1%83%D1%82%5C2026.md",
+    );
+    await expect(
+      page.getByRole("heading", {
+        name: "Обратная косая черта",
+        level: 1,
+      }),
+    ).toBeVisible();
+
+    await page.reload();
+    await expect(
+      page.getByRole("heading", {
+        name: "Обратная косая черта",
+        level: 1,
+      }),
+    ).toBeVisible();
+  } finally {
+    await rm(documentPath, { force: true });
+  }
+});
+
 test("catalog omits hidden Documents and keeps ordinary folder names", async ({
   request,
 }) => {

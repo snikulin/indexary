@@ -5,7 +5,6 @@ import {
   open,
   mkdir,
   readdir,
-  readFile,
   realpath,
   rename,
   rm,
@@ -40,7 +39,7 @@ export type KnowledgeBaseStatus =
       degradedCount: number;
       homeDocument: "available" | "unavailable";
     }
-  | { state: "home-document-unavailable" };
+  | { state: "knowledge-base-unavailable" };
 
 export type CatalogDiagnosticCode =
   | "CONTENT_UNAVAILABLE"
@@ -364,12 +363,7 @@ function toCatalogPath(relativePath: string): string {
 }
 
 function validateRelativePath(value: string, allowRoot: boolean): string {
-  if (
-    value.includes("\0") ||
-    value.includes("\\") ||
-    path.posix.isAbsolute(value) ||
-    path.win32.isAbsolute(value)
-  ) {
+  if (value.includes("\0") || path.posix.isAbsolute(value)) {
     throw new InvalidKnowledgeBasePath("The path must be relative.");
   }
 
@@ -402,7 +396,7 @@ function materialType(materialPath: string): {
 }
 
 function safeMaterialName(reference: string): string {
-  const candidate = reference.replaceAll("\\", "/").split("/").at(-1) ?? "";
+  const candidate = reference.split("/").at(-1) ?? "";
   const cleaned = [...candidate]
     .filter((character) => {
       const codePoint = character.codePointAt(0) ?? 0;
@@ -444,12 +438,7 @@ async function inspectMaterial(
   MaterialReference & { resolvedPath?: string; contentFingerprint?: string }
 > {
   const id = `${kind}-${position}`;
-  if (
-    reference.includes("\0") ||
-    reference.includes("\\") ||
-    path.posix.isAbsolute(reference) ||
-    path.win32.isAbsolute(reference)
-  ) {
+  if (reference.includes("\0") || path.posix.isAbsolute(reference)) {
     return materialFailure(id, kind, reference, "MATERIAL_INVALID_PATH");
   }
 
@@ -734,6 +723,27 @@ async function discoverKnowledgeBase(
     diagnostics,
     sourceFingerprint: sourceState.digest("hex"),
   };
+}
+
+export async function readDiscoveredDocument(
+  canonicalRoot: string,
+  canonicalPath: string,
+): Promise<string> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(canonicalPath, "r");
+    const openedTarget = await realpath(`/proc/self/fd/${handle.fd}`);
+    if (!isInsideRoot(canonicalRoot, openedTarget)) {
+      throw new Error("The opened Document left the Knowledge Base.");
+    }
+    const metadata = await handle.stat();
+    if (!metadata.isFile()) {
+      throw new Error("The opened Document is not a file.");
+    }
+    return await handle.readFile("utf8");
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 function defaultCacheRoot(): string {
@@ -1099,7 +1109,7 @@ async function buildCatalog(
       try {
         const interpreted = await interpretDocumentForIndex(
           discovered.path,
-          await readFile(discovered.canonicalPath, "utf8"),
+          await readDiscoveredDocument(canonicalRoot, discovered.canonicalPath),
           { resolveWikilink },
         );
         document = interpreted.document;
@@ -1643,7 +1653,7 @@ export function createKnowledgeBase(
       const canonicalRoot = await realpath(configuredRoot);
       const rootMetadata = await stat(canonicalRoot);
       if (!rootMetadata.isDirectory()) {
-        currentStatus = { state: "home-document-unavailable" };
+        currentStatus = { state: "knowledge-base-unavailable" };
         return;
       }
       canonicalKnowledgeBaseRoot = canonicalRoot;
@@ -1694,7 +1704,7 @@ export function createKnowledgeBase(
         updateStatus(database);
       }
     } catch (error) {
-      currentStatus = { state: "home-document-unavailable" };
+      currentStatus = { state: "knowledge-base-unavailable" };
       if (error instanceof KnowledgeBaseStartupError) {
         throw error;
       }

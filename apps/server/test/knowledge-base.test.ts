@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   stat,
@@ -21,6 +22,7 @@ import {
   createKnowledgeBase,
   InvalidKnowledgeBasePath,
   KnowledgeBaseStartupError,
+  readDiscoveredDocument,
   verifyFts5Support,
 } from "../src/knowledge-base/index.js";
 import { captureTree } from "./helpers.js";
@@ -214,8 +216,6 @@ describe("Knowledge Base", () => {
       "../private.md",
       "folder/../index.md",
       "/etc/passwd",
-      "C:\\private.md",
-      "folder\\document.md",
       ".",
     ]) {
       await expect(knowledgeBase.openDocument(invalid)).rejects.toBeInstanceOf(
@@ -225,6 +225,90 @@ describe("Knowledge Base", () => {
         InvalidKnowledgeBasePath,
       );
     }
+  });
+
+  test("opens legal Linux backslash names without treating them as separators", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-backslash-"));
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
+    temporaryDirectories.push(root, cacheRoot);
+    const folderName = "Раздел\\архив";
+    const documentName = "C:\\Документ.md";
+    const materialName = "источник\\данные.bin";
+    const attachmentName = "вложение\\архив.bin";
+    await mkdir(path.join(root, folderName));
+    await writeFile(
+      path.join(root, "index.md"),
+      `---\noriginals: ['${materialName}']\n---\n# Главная\n\n[Архив](вложение%5Cархив.bin)\n`,
+    );
+    await writeFile(path.join(root, materialName), "material");
+    await writeFile(path.join(root, attachmentName), "attachment");
+    await writeFile(
+      path.join(root, folderName, documentName),
+      "# Обратная косая черта\n",
+    );
+    const knowledgeBase = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "backslash",
+    });
+
+    await knowledgeBase.initialize();
+
+    await expect(knowledgeBase.browseFolder(folderName)).resolves.toMatchObject(
+      {
+        path: folderName,
+        documents: [
+          {
+            path: `${folderName}/${documentName}`,
+            title: "Обратная косая черта",
+          },
+        ],
+      },
+    );
+    await expect(
+      knowledgeBase.openDocument(`${folderName}/${documentName}`),
+    ).resolves.toMatchObject({ path: `${folderName}/${documentName}` });
+    const home = await knowledgeBase.openHomeDocument();
+    expect(home?.materials.sourceMaterials[0]).toMatchObject({
+      path: materialName,
+      status: "available",
+    });
+    expect(home?.materials.attachments[0]).toMatchObject({
+      path: attachmentName,
+      status: "available",
+    });
+    const openedMaterial = await knowledgeBase.openMaterial(
+      "index.md",
+      "source-material-0",
+    );
+    expect(openedMaterial).toMatchObject({ size: 8 });
+    await openedMaterial?.file.close();
+    const openedAttachment = await knowledgeBase.openMaterial(
+      "index.md",
+      "attachment-0",
+    );
+    expect(openedAttachment).toMatchObject({ size: 10 });
+    await openedAttachment?.file.close();
+  });
+
+  test("rechecks the opened Document descriptor after a discovered path is replaced", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-document-fd-"));
+    const outside = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-document-fd-outside-"),
+    );
+    temporaryDirectories.push(root, outside);
+    const discoveredPath = path.join(root, "Документ.md");
+    const movedPath = path.join(root, "Сохранённый.md");
+    const outsidePath = path.join(outside, "private.md");
+    await writeFile(discoveredPath, "# Безопасно\n");
+    await writeFile(outsidePath, "# Private\nsecret\n");
+    const canonicalRoot = await realpath(root);
+    const canonicalDocument = await realpath(discoveredPath);
+    await rename(discoveredPath, movedPath);
+    await symlink(outsidePath, discoveredPath);
+
+    await expect(
+      readDiscoveredDocument(canonicalRoot, canonicalDocument),
+    ).rejects.toThrow("left the Knowledge Base");
   });
 
   test("builds a versioned rebuildable SQLite catalog in isolated namespaces", async () => {
@@ -484,7 +568,7 @@ describe("Knowledge Base", () => {
       profile: "interrupt",
     });
     await failed.initialize();
-    expect(failed.status()).toEqual({ state: "home-document-unavailable" });
+    expect(failed.status()).toEqual({ state: "knowledge-base-unavailable" });
     expect(await readFile(catalogFile)).toEqual(catalogBeforeFailure);
     await failed.close();
     await rename(unavailableRoot, root);
@@ -668,7 +752,7 @@ describe("Knowledge Base", () => {
     await knowledgeBase.initialize();
 
     expect(knowledgeBase.status()).toEqual({
-      state: "home-document-unavailable",
+      state: "knowledge-base-unavailable",
     });
     expect(await captureTree(root)).toEqual(before);
   });

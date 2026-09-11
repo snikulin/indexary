@@ -34,7 +34,7 @@ const NotReadyResponse = Type.Object(
     status: Type.Literal("not-ready"),
     reason: Type.Union([
       Type.Literal("initializing"),
-      Type.Literal("home-document-unavailable"),
+      Type.Literal("knowledge-base-unavailable"),
     ]),
   },
   { additionalProperties: false },
@@ -44,6 +44,39 @@ const WikilinkState = Type.Union([
   Type.Literal("missing"),
   Type.Literal("ambiguous"),
 ]);
+const MaterialResponse = Type.Object(
+  {
+    id: Type.String({ minLength: 1 }),
+    kind: Type.Union([
+      Type.Literal("source-material"),
+      Type.Literal("attachment"),
+    ]),
+    name: Type.String({ minLength: 1 }),
+    path: Type.String({ minLength: 1 }),
+    status: Type.Union([
+      Type.Literal("available"),
+      Type.Literal("missing"),
+      Type.Literal("invalid"),
+    ]),
+    mimeType: Type.String({ minLength: 1 }),
+    size: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    preview: Type.Union([
+      Type.Literal("image"),
+      Type.Literal("pdf"),
+      Type.Literal("unsupported"),
+    ]),
+    diagnostic: Type.Optional(
+      Type.Object(
+        {
+          code: Type.String({ minLength: 1 }),
+          message: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 const DocumentResponse = Type.Object(
   {
     revision: Type.Integer({ minimum: 0 }),
@@ -55,76 +88,8 @@ const DocumentResponse = Type.Object(
     sourceMaterials: Type.Array(Type.String({ minLength: 1 })),
     materials: Type.Object(
       {
-        sourceMaterials: Type.Array(
-          Type.Object(
-            {
-              id: Type.String({ minLength: 1 }),
-              kind: Type.Union([
-                Type.Literal("source-material"),
-                Type.Literal("attachment"),
-              ]),
-              name: Type.String({ minLength: 1 }),
-              path: Type.String({ minLength: 1 }),
-              status: Type.Union([
-                Type.Literal("available"),
-                Type.Literal("missing"),
-                Type.Literal("invalid"),
-              ]),
-              mimeType: Type.String({ minLength: 1 }),
-              size: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
-              preview: Type.Union([
-                Type.Literal("image"),
-                Type.Literal("pdf"),
-                Type.Literal("unsupported"),
-              ]),
-              diagnostic: Type.Optional(
-                Type.Object(
-                  {
-                    code: Type.String({ minLength: 1 }),
-                    message: Type.String({ minLength: 1 }),
-                  },
-                  { additionalProperties: false },
-                ),
-              ),
-            },
-            { additionalProperties: false },
-          ),
-        ),
-        attachments: Type.Array(
-          Type.Object(
-            {
-              id: Type.String({ minLength: 1 }),
-              kind: Type.Union([
-                Type.Literal("source-material"),
-                Type.Literal("attachment"),
-              ]),
-              name: Type.String({ minLength: 1 }),
-              path: Type.String({ minLength: 1 }),
-              status: Type.Union([
-                Type.Literal("available"),
-                Type.Literal("missing"),
-                Type.Literal("invalid"),
-              ]),
-              mimeType: Type.String({ minLength: 1 }),
-              size: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
-              preview: Type.Union([
-                Type.Literal("image"),
-                Type.Literal("pdf"),
-                Type.Literal("unsupported"),
-              ]),
-              diagnostic: Type.Optional(
-                Type.Object(
-                  {
-                    code: Type.String({ minLength: 1 }),
-                    message: Type.String({ minLength: 1 }),
-                  },
-                  { additionalProperties: false },
-                ),
-              ),
-            },
-            { additionalProperties: false },
-          ),
-        ),
+        sourceMaterials: Type.Array(MaterialResponse),
+        attachments: Type.Array(MaterialResponse),
       },
       { additionalProperties: false },
     ),
