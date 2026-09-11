@@ -68,6 +68,12 @@ function Navigation({ close }: { close?: () => void }) {
 }
 
 function Context({ close }: { close?: () => void }) {
+  const documentQuery = useQuery({
+    queryKey: ["document", "index.md"],
+    queryFn: fetchHomeDocument,
+    retry: false,
+  });
+
   return (
     <aside className="context-panel" aria-label={ru.context}>
       <div className="panel-heading">
@@ -82,20 +88,38 @@ function Context({ close }: { close?: () => void }) {
         ) : null}
       </div>
       <div className="context-tabs" aria-label={ru.contextSections}>
-        {contextSections.map((section, index) => (
+        {contextSections.map((section) => (
           <button
             key={section}
-            className={index === 0 ? "selected" : ""}
+            className={section === ru.properties ? "selected" : ""}
             type="button"
           >
             {section}
           </button>
         ))}
       </div>
-      <div className="empty-context">
-        <FileText aria-hidden="true" />
-        <p>{ru.emptyContext}</p>
-      </div>
+      {documentQuery.data ? (
+        <section className="properties" aria-labelledby="properties-heading">
+          <h3 id="properties-heading">{ru.properties}</h3>
+          {documentQuery.data.properties.length > 0 ? (
+            <dl>
+              {documentQuery.data.properties.map((property) => (
+                <div key={property.name}>
+                  <dt>{property.name}</dt>
+                  <dd>{property.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p>{ru.noProperties}</p>
+          )}
+        </section>
+      ) : (
+        <div className="empty-context">
+          <FileText aria-hidden="true" />
+          <p>{ru.emptyContext}</p>
+        </div>
+      )}
     </aside>
   );
 }
@@ -126,6 +150,20 @@ function DocumentView() {
     <article className="document">
       <div className="document-kicker">/{documentQuery.data.path}</div>
       <h1>{documentQuery.data.title}</h1>
+      {documentQuery.data.tags.length > 0 ? (
+        <ul className="document-tags" aria-label={ru.tags}>
+          {documentQuery.data.tags.map((tag) => (
+            <li key={tag}>{tag}</li>
+          ))}
+        </ul>
+      ) : null}
+      {documentQuery.data.diagnostics.length > 0 ? (
+        <section className="document-diagnostics" aria-label={ru.diagnostics}>
+          {documentQuery.data.diagnostics.map((diagnostic) => (
+            <p key={diagnostic.code}>{diagnostic.message}</p>
+          ))}
+        </section>
+      ) : null}
       <div
         className="document-body"
         dangerouslySetInnerHTML={{ __html: documentQuery.data.html }}

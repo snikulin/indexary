@@ -2,6 +2,11 @@ export interface HomeDocument {
   path: "index.md";
   title: string;
   html: string;
+  searchableText: string;
+  tags: string[];
+  sourceMaterials: string[];
+  properties: Array<{ name: string; value: string }>;
+  diagnostics: Array<{ code: string; message: string }>;
 }
 
 export async function fetchHomeDocument(): Promise<HomeDocument> {

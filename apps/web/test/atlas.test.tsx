@@ -29,6 +29,19 @@ describe("Atlas", () => {
           path: "index.md",
           title: "Домашний документ",
           html: "<p>Содержимое</p>",
+          searchableText: "Домашний документ Содержимое",
+          tags: ["важное"],
+          sourceMaterials: [],
+          properties: [
+            { name: "tags", value: "[важное]" },
+            { name: "status", value: "в работе" },
+          ],
+          diagnostics: [
+            {
+              code: "UNSAFE_URL_REMOVED",
+              message: "Ссылка с небезопасной схемой отключена.",
+            },
+          ],
         }),
       }),
     );
@@ -43,6 +56,14 @@ describe("Atlas", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole("complementary", { name: "Контекст Документа" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Теги" })).toHaveTextContent(
+      "важное",
+    );
+    expect(screen.getByText("status")).toBeInTheDocument();
+    expect(screen.getByText("в работе")).toBeInTheDocument();
+    expect(
+      screen.getByText("Ссылка с небезопасной схемой отключена."),
     ).toBeInTheDocument();
   });
 

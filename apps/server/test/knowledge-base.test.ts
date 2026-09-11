@@ -76,7 +76,7 @@ describe("Knowledge Base", () => {
     await expect(knowledgeBase.openHomeDocument()).resolves.toBeUndefined();
   });
 
-  test("escapes active HTML in the tracer representation", async () => {
+  test("removes active HTML and reports a content-safe diagnostic", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "indexary-safe-home-"));
     temporaryDirectories.push(root);
     await writeFile(
@@ -87,8 +87,11 @@ describe("Knowledge Base", () => {
 
     await knowledgeBase.initialize();
 
-    expect((await knowledgeBase.openHomeDocument())?.html).toContain(
-      "&lt;script&gt;alert(1)&lt;/script&gt;",
-    );
+    const document = await knowledgeBase.openHomeDocument();
+    expect(document?.html).not.toContain("script");
+    expect(document?.diagnostics).toContainEqual({
+      code: "RAW_HTML_REMOVED",
+      message: "Небезопасный HTML удалён из Документа.",
+    });
   });
 });

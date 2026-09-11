@@ -35,6 +35,27 @@ const DocumentResponse = Type.Object(
     path: Type.Literal("index.md"),
     title: Type.String({ minLength: 1 }),
     html: Type.String(),
+    searchableText: Type.String(),
+    tags: Type.Array(Type.String({ minLength: 1 })),
+    sourceMaterials: Type.Array(Type.String({ minLength: 1 })),
+    properties: Type.Array(
+      Type.Object(
+        {
+          name: Type.String({ minLength: 1 }),
+          value: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    diagnostics: Type.Array(
+      Type.Object(
+        {
+          code: Type.String({ minLength: 1 }),
+          message: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

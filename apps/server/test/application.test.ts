@@ -50,7 +50,12 @@ describe("assembled Fastify application", () => {
     expect(home.json()).toMatchObject({
       path: "index.md",
       title: "Добро пожаловать в Индексари",
+      tags: [],
+      properties: [],
+      diagnostics: [],
     });
+    expect(home.json()).toHaveProperty("searchableText");
+    expect(home.json()).not.toHaveProperty("markdown");
 
     const ready = await app.inject({ method: "GET", url: "/api/health/ready" });
     expect(ready.statusCode).toBe(200);
@@ -60,6 +65,29 @@ describe("assembled Fastify application", () => {
     });
     await app.close();
     expect(await captureTree(fixtureRoot)).toEqual(before);
+  });
+
+  test("serves a malformed Document diagnostic without losing readiness", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-malformed-home-"),
+    );
+    temporaryDirectories.push(root);
+    await writeFile(
+      path.join(root, "index.md"),
+      "---\ntags: [сломано\n---\n# Доступный Документ\n\nТекст остаётся доступен.\n",
+    );
+    const app = await buildApplication(config(root));
+    await app.ready();
+
+    const home = await app.inject("/api/documents/home");
+    expect(home.statusCode).toBe(200);
+    expect(home.json()).toMatchObject({
+      title: "Доступный Документ",
+      diagnostics: [{ code: "FRONTMATTER_INVALID" }],
+    });
+    expect(home.json().html).toContain("Текст остаётся доступен");
+    expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
+    await app.close();
   });
 
   test("keeps liveness up and reports a clear non-fatal missing Home Document", async () => {

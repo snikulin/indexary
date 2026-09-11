@@ -1,6 +1,12 @@
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+import {
+  interpretDocument,
+  type DocumentRepresentation,
+  unreadableDocument,
+} from "./document.js";
+
 const HOME_DOCUMENT_PATH = "index.md";
 
 export type KnowledgeBaseStatus =
@@ -8,16 +14,12 @@ export type KnowledgeBaseStatus =
   | { state: "ready" }
   | { state: "home-document-unavailable" };
 
-export interface DocumentRepresentation {
-  path: "index.md";
-  title: string;
-  html: string;
-}
-
 export interface KnowledgeBase {
   initialize(): Promise<void>;
   status(): KnowledgeBaseStatus;
-  openHomeDocument(): Promise<DocumentRepresentation | undefined>;
+  openHomeDocument(): Promise<
+    DocumentRepresentation<typeof HOME_DOCUMENT_PATH> | undefined
+  >;
 }
 
 function isInsideRoot(root: string, target: string): boolean {
@@ -28,48 +30,10 @@ function isInsideRoot(root: string, target: string): boolean {
   );
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function inlineMarkup(value: string): string {
-  return escapeHtml(value).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-}
-
-function interpretHomeDocument(markdown: string): DocumentRepresentation {
-  const normalized = markdown.replaceAll("\r\n", "\n");
-  const lines = normalized.split("\n");
-  const headingIndex = lines.findIndex((line) => /^#\s+\S/.test(line));
-  const title =
-    headingIndex === -1
-      ? "index"
-      : lines[headingIndex]!.replace(/^#\s+/, "").trim();
-  const bodyLines = lines.filter((_, index) => index !== headingIndex);
-  const paragraphs = bodyLines
-    .join("\n")
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean)
-    .map(
-      (paragraph) =>
-        `<p>${inlineMarkup(paragraph).replaceAll("\n", "<br>")}</p>`,
-    );
-
-  return {
-    path: HOME_DOCUMENT_PATH,
-    title,
-    html: paragraphs.join("\n"),
-  };
-}
-
 export function createKnowledgeBase(configuredRoot: string): KnowledgeBase {
   let canonicalRoot: string | undefined;
-  let homeDocument: DocumentRepresentation | undefined;
+  let homeDocument:
+    DocumentRepresentation<typeof HOME_DOCUMENT_PATH> | undefined;
   let currentStatus: KnowledgeBaseStatus = { state: "initializing" };
   let initialization: Promise<void> | undefined;
 
@@ -95,9 +59,14 @@ export function createKnowledgeBase(configuredRoot: string): KnowledgeBase {
         return;
       }
 
-      homeDocument = interpretHomeDocument(
-        await readFile(canonicalCandidate, "utf8"),
-      );
+      try {
+        homeDocument = await interpretDocument(
+          HOME_DOCUMENT_PATH,
+          await readFile(canonicalCandidate, "utf8"),
+        );
+      } catch {
+        homeDocument = unreadableDocument(HOME_DOCUMENT_PATH);
+      }
       currentStatus = { state: "ready" };
     } catch {
       currentStatus = { state: "home-document-unavailable" };
