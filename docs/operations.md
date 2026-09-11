@@ -185,8 +185,9 @@ single-service restart: there is no blue/green deployment, automatic updater,
 ambient runtime, or public listener.
 
 Successful completion is recorded as `locally-verified`, and its lifecycle
-event is `deployment-locally-verified`. These names deliberately do not claim
-tailnet or human production verification; those remain Issue #15.
+event is `deployment-locally-verified`. These names describe the deployment
+transaction itself: the persistent tailnet route is verified separately because
+it is host configuration outside the release lifecycle.
 
 Every transaction is recorded atomically at
 `$XDG_STATE_HOME/indexary/deployment.json`; it contains release identities and
@@ -233,10 +234,40 @@ predecessors. Pruning validates every exact child of `releases/`, never follows
 symbolic links, and never touches configuration, transaction state, the active
 production cache, or a candidate cache.
 
-## Pending production boundary
+## Continuous private production
 
-Release, installation, deployment, rollback, smoke, and verification never
-invoke `tailscale` or change Tailscale Serve. Private tailnet policy, the
-persistent Serve route, any external Home Document rename, owner-client smoke,
-acceptance of the exercised target-host rollback evidence, and the
-first-production declaration remain the human checkpoint in Issue #15.
+The installed user unit is enabled for `default.target`, restarts on failure,
+and runs independently of an interactive login when systemd user lingering is
+enabled. Inspect these host guarantees without revealing application data:
+
+```sh
+systemctl --user is-enabled indexary.service
+systemctl --user is-active indexary.service
+loginctl show-user "$USER" -p Linger
+mise run verify:service
+```
+
+The expected results are `enabled`, `active`, and `Linger=yes`. If lingering is
+disabled, enable it once with `loginctl enable-linger "$USER"`; this is host
+configuration rather than part of an Indexary release.
+
+Configure the private HTTPS route once, outside the deployment lifecycle:
+
+```sh
+tailscale serve --bg --yes http://127.0.0.1:4176
+tailscale serve status
+```
+
+Use Tailscale Serve, never Funnel. Tailnet policy must restrict the node and
+application to the owner; Indexary continues to bind only to loopback and adds
+no application authentication. Because every release keeps the same loopback
+port, normal deployment and rollback preserve the Serve route without invoking
+`tailscale` or rewriting its state.
+
+After initial setup, verify the private URL from a real owner client. Exercise
+the Home Document, folder navigation, a direct Document route, search, tag
+filtering, a link or backlink, one Source Material or Attachment, and one live
+external change. Restore the external test edit, run `mise run verify:service`,
+and confirm that the Knowledge Base fingerprint is unchanged. Record only the
+release identity and pass/fail outcomes; never record private URLs, paths,
+filenames, content, or metadata values.
