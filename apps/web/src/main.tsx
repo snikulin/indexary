@@ -18,7 +18,35 @@ const homeRoute = createRoute({
   path: "/",
   component: Atlas,
 });
-const routeTree = rootRoute.addChildren([homeRoute]);
+const documentRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/documents/$",
+  component: function DocumentRoute() {
+    const { _splat } = documentRoute.useParams();
+    return (
+      <Atlas selection={{ kind: "document", path: _splat ?? "index.md" }} />
+    );
+  },
+});
+const rootFolderRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/folders",
+  component: () => <Atlas selection={{ kind: "folder", path: "" }} />,
+});
+const folderRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/folders/$",
+  component: function FolderRoute() {
+    const { _splat } = folderRoute.useParams();
+    return <Atlas selection={{ kind: "folder", path: _splat ?? "" }} />;
+  },
+});
+const routeTree = rootRoute.addChildren([
+  homeRoute,
+  documentRoute,
+  rootFolderRoute,
+  folderRoute,
+]);
 const router = createRouter({ routeTree });
 const queryClient = new QueryClient();
 

@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   BookOpenText,
+  ChevronLeft,
   ChevronRight,
   FileText,
   FolderClosed,
@@ -9,11 +11,15 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { fetchHomeDocument } from "./api";
+import { documentRoute, fetchCatalog, fetchDocument, folderRoute } from "./api";
 import { Button } from "./components/ui/button";
 import { ru } from "./i18n/ru";
+
+export type AtlasSelection =
+  | { kind: "document"; path: string; root?: boolean }
+  | { kind: "folder"; path: string };
 
 interface DrawerState {
   navigation: boolean;
@@ -28,7 +34,46 @@ const contextSections = [
   ru.properties,
 ] as const;
 
-function Navigation({ close }: { close?: () => void }) {
+function parentFolder(itemPath: string): string {
+  const segments = itemPath.split("/");
+  segments.pop();
+  return segments.join("/");
+}
+
+function lastDocument(): string | undefined {
+  try {
+    const value = localStorage.getItem("indexary:last-document");
+    if (
+      value === null ||
+      value === "index.md" ||
+      value.startsWith("/") ||
+      value.split("/").includes("..")
+    ) {
+      return undefined;
+    }
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+function Navigation({
+  selection,
+  close,
+}: {
+  selection: AtlasSelection;
+  close?: () => void;
+}) {
+  const folderPath =
+    selection.kind === "folder" ? selection.path : parentFolder(selection.path);
+  const catalogQuery = useQuery({
+    queryKey: ["catalog", folderPath],
+    queryFn: () => fetchCatalog(folderPath),
+    retry: false,
+  });
+  const [recent] = useState(lastDocument);
+  const parent = parentFolder(folderPath);
+
   return (
     <nav className="navigation" aria-label={ru.knowledgeBase}>
       <div className="panel-heading">
@@ -47,30 +92,108 @@ function Navigation({ close }: { close?: () => void }) {
         <span className="sr-only">{ru.searchPlaceholder}</span>
         <input type="search" placeholder={ru.searchPlaceholder} disabled />
       </label>
+
       <div className="tree-label">{ru.document}</div>
       <a
-        className="tree-item active"
+        className={`tree-item ${selection.kind === "document" && selection.root ? "active" : ""}`}
         href="/"
-        aria-current="page"
+        aria-current={
+          selection.kind === "document" && selection.root ? "page" : undefined
+        }
         onClick={close}
       >
         <BookOpenText aria-hidden="true" />
         <span>{ru.home}</span>
       </a>
-      <div className="tree-label folders-label">{ru.folders}</div>
-      <div className="tree-item muted" aria-disabled="true">
-        <FolderClosed aria-hidden="true" />
-        <span>{ru.foldersPlaceholder}</span>
-        <ChevronRight aria-hidden="true" />
-      </div>
+      {recent ? (
+        <a className="tree-item recent-item" href={documentRoute(recent)}>
+          <FileText aria-hidden="true" />
+          <span>{ru.lastDocument}</span>
+        </a>
+      ) : null}
+
+      <div className="tree-label folders-label">{ru.folderContents}</div>
+      {folderPath !== "" ? (
+        <a className="tree-item" href={folderRoute(parent)} onClick={close}>
+          <ChevronLeft aria-hidden="true" />
+          <span>{parent === "" ? ru.rootFolder : parent}</span>
+        </a>
+      ) : null}
+
+      {catalogQuery.isPending ? (
+        <p className="tree-status">{ru.loadingCatalog}</p>
+      ) : catalogQuery.isError ? (
+        <p className="tree-status">{ru.catalogUnavailable}</p>
+      ) : (
+        <>
+          <ul className="tree-list" aria-label={ru.folders}>
+            {catalogQuery.data.folders.map((folder) => (
+              <li key={folder.path}>
+                <a
+                  className={`tree-item ${selection.kind === "folder" && selection.path === folder.path ? "active" : ""}`}
+                  href={folderRoute(folder.path)}
+                  onClick={close}
+                >
+                  <FolderClosed aria-hidden="true" />
+                  <span>{folder.name}</span>
+                  <ChevronRight aria-hidden="true" />
+                </a>
+              </li>
+            ))}
+          </ul>
+          <ul className="tree-list" aria-label={ru.documents}>
+            {catalogQuery.data.documents.map((document) => {
+              const isHome = document.path === "index.md";
+              const active =
+                selection.kind === "document" &&
+                selection.path === document.path;
+              return (
+                <li key={document.path}>
+                  <a
+                    className={`tree-item ${active ? "active" : ""}`}
+                    href={isHome ? "/" : documentRoute(document.path)}
+                    aria-current={active ? "page" : undefined}
+                    onClick={close}
+                  >
+                    <FileText aria-hidden="true" />
+                    <span>{document.title}</span>
+                  </a>
+                </li>
+              );
+            })}
+          </ul>
+          {catalogQuery.data.folders.length === 0 &&
+          catalogQuery.data.documents.length === 0 ? (
+            <p className="tree-status">{ru.emptyFolder}</p>
+          ) : null}
+          {catalogQuery.data.diagnostics.length > 0 ? (
+            <section
+              className="catalog-diagnostics"
+              aria-label={ru.catalogDiagnostics}
+            >
+              <AlertTriangle aria-hidden="true" />
+              <p>{ru.catalogWarnings(catalogQuery.data.diagnostics.length)}</p>
+            </section>
+          ) : null}
+        </>
+      )}
     </nav>
   );
 }
 
-function Context({ close }: { close?: () => void }) {
+function Context({
+  selection,
+  close,
+}: {
+  selection: AtlasSelection;
+  close?: () => void;
+}) {
+  const documentPath =
+    selection.kind === "document" ? selection.path : undefined;
   const documentQuery = useQuery({
-    queryKey: ["document", "index.md"],
-    queryFn: fetchHomeDocument,
+    queryKey: ["document", documentPath],
+    queryFn: () => fetchDocument(documentPath!),
+    enabled: documentPath !== undefined,
     retry: false,
   });
 
@@ -124,12 +247,27 @@ function Context({ close }: { close?: () => void }) {
   );
 }
 
-function DocumentView() {
+function DocumentView({
+  selection,
+}: {
+  selection: Extract<AtlasSelection, { kind: "document" }>;
+}) {
+  const documentPath = selection.path;
   const documentQuery = useQuery({
-    queryKey: ["document", "index.md"],
-    queryFn: fetchHomeDocument,
+    queryKey: ["document", documentPath],
+    queryFn: () => fetchDocument(documentPath),
     retry: false,
   });
+
+  useEffect(() => {
+    if (documentQuery.data && documentQuery.data.path !== "index.md") {
+      try {
+        localStorage.setItem("indexary:last-document", documentQuery.data.path);
+      } catch {
+        // A disabled browser store must not prevent browsing.
+      }
+    }
+  }, [documentQuery.data]);
 
   if (documentQuery.isPending) {
     return <div className="document-state">{ru.loading}</div>;
@@ -139,8 +277,12 @@ function DocumentView() {
     return (
       <div className="document-state error-state" role="status">
         <FileText aria-hidden="true" />
-        <h1>{ru.unavailableTitle}</h1>
-        <p>{ru.unavailableBody}</p>
+        <h1>
+          {selection.root ? ru.unavailableTitle : ru.documentUnavailableTitle}
+        </h1>
+        <p>
+          {selection.root ? ru.unavailableBody : ru.documentUnavailableBody}
+        </p>
         <Button onClick={() => void documentQuery.refetch()}>{ru.retry}</Button>
       </div>
     );
@@ -172,7 +314,71 @@ function DocumentView() {
   );
 }
 
-export function Atlas() {
+function FolderView({ folderPath }: { folderPath: string }) {
+  const catalogQuery = useQuery({
+    queryKey: ["catalog", folderPath],
+    queryFn: () => fetchCatalog(folderPath),
+    retry: false,
+  });
+
+  if (catalogQuery.isPending) {
+    return <div className="document-state">{ru.loadingCatalog}</div>;
+  }
+  if (catalogQuery.isError) {
+    return (
+      <div className="document-state error-state" role="status">
+        <FolderClosed aria-hidden="true" />
+        <h1>{ru.folderUnavailableTitle}</h1>
+        <p>{ru.folderUnavailableBody}</p>
+      </div>
+    );
+  }
+
+  return (
+    <section className="folder-view" aria-labelledby="folder-heading">
+      <div className="document-kicker">
+        /{catalogQuery.data.path || ru.rootFolder}
+      </div>
+      <h1 id="folder-heading">{catalogQuery.data.name}</h1>
+      <p>{ru.folderIntroduction}</p>
+      <ul className="folder-entries" aria-label={ru.folderContents}>
+        {catalogQuery.data.folders.map((folder) => (
+          <li key={folder.path}>
+            <a href={folderRoute(folder.path)}>
+              <FolderClosed aria-hidden="true" />
+              <span>{folder.name}</span>
+              <ChevronRight aria-hidden="true" />
+            </a>
+          </li>
+        ))}
+        {catalogQuery.data.documents.map((document) => (
+          <li key={document.path}>
+            <a
+              href={
+                document.path === "index.md"
+                  ? "/"
+                  : documentRoute(document.path)
+              }
+            >
+              <FileText aria-hidden="true" />
+              <span>{document.title}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+      {catalogQuery.data.folders.length === 0 &&
+      catalogQuery.data.documents.length === 0 ? (
+        <p className="empty-folder">{ru.emptyFolder}</p>
+      ) : null}
+    </section>
+  );
+}
+
+export function Atlas({
+  selection = { kind: "document", path: "index.md", root: true },
+}: {
+  selection?: AtlasSelection;
+}) {
   const [drawers, setDrawers] = useState<DrawerState>({
     navigation: false,
     context: false,
@@ -208,13 +414,17 @@ export function Atlas() {
 
       <div className="atlas-grid">
         <div className="desktop-panel">
-          <Navigation />
+          <Navigation selection={selection} />
         </div>
         <main className="document-column">
-          <DocumentView />
+          {selection.kind === "folder" ? (
+            <FolderView folderPath={selection.path} />
+          ) : (
+            <DocumentView selection={selection} />
+          )}
         </main>
         <div className="desktop-panel">
-          <Context />
+          <Context selection={selection} />
         </div>
       </div>
 
@@ -227,9 +437,9 @@ export function Atlas() {
           />
           <div className="drawer">
             {drawers.navigation ? (
-              <Navigation close={closeDrawers} />
+              <Navigation selection={selection} close={closeDrawers} />
             ) : (
-              <Context close={closeDrawers} />
+              <Context selection={selection} close={closeDrawers} />
             )}
           </div>
         </div>

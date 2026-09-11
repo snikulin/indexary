@@ -41,6 +41,19 @@ describe("runtime configuration", () => {
     });
   });
 
+  test("accepts an isolated cache root without deriving it from the Knowledge Base", () => {
+    expect(
+      resolveRuntimeConfig(
+        ["--knowledge-base", "fixture", "--cache-root", "derived-cache"],
+        {},
+        "/workspace",
+      ),
+    ).toMatchObject({
+      knowledgeBasePath: path.resolve("/workspace/fixture"),
+      cacheRoot: path.resolve("/workspace/derived-cache"),
+    });
+  });
+
   test.each(["0", "65536", "not-a-port"])("rejects invalid port %s", (port) => {
     expect(() =>
       resolveRuntimeConfig(

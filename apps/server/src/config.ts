@@ -9,6 +9,7 @@ const RuntimeConfigSchema = Type.Object(
     host: Type.String({ minLength: 1 }),
     port: Type.Integer({ minimum: 1, maximum: 65_535 }),
     profile: Type.String({ minLength: 1, pattern: "^[a-z0-9][a-z0-9-]*$" }),
+    cacheRoot: Type.Optional(Type.String({ minLength: 1 })),
     webRoot: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },
@@ -29,6 +30,7 @@ interface RawOptions {
   host?: string;
   port?: string;
   profile?: string;
+  cacheRoot?: string;
   webRoot?: string;
 }
 
@@ -37,6 +39,7 @@ const optionNames: Record<string, keyof RawOptions> = {
   "--host": "host",
   "--port": "port",
   "--profile": "profile",
+  "--cache-root": "cacheRoot",
   "--web-root": "webRoot",
 };
 
@@ -92,6 +95,14 @@ export function resolveRuntimeConfig(
     host: options.host ?? environment.INDEXARY_HOST ?? "127.0.0.1",
     port: Number(portText),
     profile: options.profile ?? environment.INDEXARY_PROFILE ?? "default",
+    ...((options.cacheRoot ?? environment.INDEXARY_CACHE_ROOT)
+      ? {
+          cacheRoot: path.resolve(
+            workingDirectory,
+            options.cacheRoot ?? environment.INDEXARY_CACHE_ROOT!,
+          ),
+        }
+      : {}),
     ...((options.webRoot ?? environment.INDEXARY_WEB_ROOT)
       ? {
           webRoot: path.resolve(

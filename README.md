@@ -2,8 +2,9 @@
 
 **An open-source, local-first web interface for exploring filesystem-based knowledge bases.**
 
-> Project status: the production-shaped tracer bullet opens the Home Document through the
-> React/Fastify stack; the rest of the v1 behaviors are under active implementation.
+> Project status: the production-shaped Atlas opens the Home Document and browses the
+> complete nested Document catalog through React, Fastify, and a rebuildable SQLite cache;
+> the rest of the v1 behaviors are under active implementation.
 
 ## Overview
 

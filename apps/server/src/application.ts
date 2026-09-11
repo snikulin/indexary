@@ -9,6 +9,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type { RuntimeConfig } from "./config.js";
 import {
   createKnowledgeBase,
+  InvalidKnowledgeBasePath,
   type KnowledgeBase,
 } from "./knowledge-base/index.js";
 
@@ -32,7 +33,7 @@ const NotReadyResponse = Type.Object(
 );
 const DocumentResponse = Type.Object(
   {
-    path: Type.Literal("index.md"),
+    path: Type.String({ minLength: 1 }),
     title: Type.String({ minLength: 1 }),
     html: Type.String(),
     searchableText: Type.String(),
@@ -61,8 +62,52 @@ const DocumentResponse = Type.Object(
 );
 const ErrorResponse = Type.Object(
   {
-    code: Type.Literal("HOME_DOCUMENT_NOT_FOUND"),
+    code: Type.Union([
+      Type.Literal("HOME_DOCUMENT_NOT_FOUND"),
+      Type.Literal("DOCUMENT_NOT_FOUND"),
+      Type.Literal("FOLDER_NOT_FOUND"),
+      Type.Literal("INVALID_KNOWLEDGE_BASE_PATH"),
+    ]),
     message: Type.String(),
+  },
+  { additionalProperties: false },
+);
+const PathQuery = Type.Object(
+  { path: Type.Optional(Type.String()) },
+  { additionalProperties: false },
+);
+const CatalogResponse = Type.Object(
+  {
+    path: Type.String(),
+    name: Type.String({ minLength: 1 }),
+    folders: Type.Array(
+      Type.Object(
+        {
+          path: Type.String({ minLength: 1 }),
+          name: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    documents: Type.Array(
+      Type.Object(
+        {
+          path: Type.String({ minLength: 1 }),
+          title: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    diagnostics: Type.Array(
+      Type.Object(
+        {
+          path: Type.String({ minLength: 1 }),
+          code: Type.String({ minLength: 1 }),
+          message: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -76,7 +121,13 @@ export async function buildApplication(
   options: ApplicationOptions = {},
 ): Promise<FastifyInstance> {
   const knowledgeBase =
-    options.knowledgeBase ?? createKnowledgeBase(config.knowledgeBasePath);
+    options.knowledgeBase ??
+    createKnowledgeBase(config.knowledgeBasePath, {
+      profile: config.profile,
+      ...(config.cacheRoot === undefined
+        ? {}
+        : { cacheRoot: config.cacheRoot }),
+    });
   const app = Fastify({ logger: false }).setValidatorCompiler(
     TypeBoxValidatorCompiler,
   );
@@ -86,6 +137,79 @@ export async function buildApplication(
     "/api/health/live",
     { schema: { response: { 200: LiveResponse } } },
     async () => ({ status: "live" as const }),
+  );
+
+  typedApp.get(
+    "/api/catalog",
+    {
+      schema: {
+        querystring: PathQuery,
+        response: {
+          200: CatalogResponse,
+          400: ErrorResponse,
+          404: ErrorResponse,
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const folder = await knowledgeBase.browseFolder(
+          request.query.path ?? "",
+        );
+        if (folder === undefined) {
+          return reply.status(404).send({
+            code: "FOLDER_NOT_FOUND" as const,
+            message: "Папка не найдена.",
+          });
+        }
+        return folder;
+      } catch (error) {
+        if (error instanceof InvalidKnowledgeBasePath) {
+          return reply.status(400).send({
+            code: "INVALID_KNOWLEDGE_BASE_PATH" as const,
+            message: "Путь внутри Базы знаний недопустим.",
+          });
+        }
+        throw error;
+      }
+    },
+  );
+
+  typedApp.get(
+    "/api/documents",
+    {
+      schema: {
+        querystring: Type.Object(
+          { path: Type.String({ minLength: 1 }) },
+          { additionalProperties: false },
+        ),
+        response: {
+          200: DocumentResponse,
+          400: ErrorResponse,
+          404: ErrorResponse,
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const document = await knowledgeBase.openDocument(request.query.path);
+        if (document === undefined) {
+          return reply.status(404).send({
+            code: "DOCUMENT_NOT_FOUND" as const,
+            message: "Документ не найден.",
+          });
+        }
+        return document;
+      } catch (error) {
+        if (error instanceof InvalidKnowledgeBasePath) {
+          return reply.status(400).send({
+            code: "INVALID_KNOWLEDGE_BASE_PATH" as const,
+            message: "Путь внутри Базы знаний недопустим.",
+          });
+        }
+        throw error;
+      }
+    },
   );
 
   typedApp.get(
@@ -126,6 +250,14 @@ export async function buildApplication(
     typedApp.get("/", async (_request, reply) =>
       reply.type("text/html").sendFile("index.html"),
     );
+    typedApp.get("/folders", async (_request, reply) =>
+      reply.type("text/html").sendFile("index.html"),
+    );
+    for (const route of ["/documents/*", "/folders/*"]) {
+      typedApp.get(route, async (_request, reply) =>
+        reply.type("text/html").sendFile("index.html"),
+      );
+    }
   }
 
   void knowledgeBase.initialize();
