@@ -5,6 +5,7 @@ import {
   isSafeDocumentUrl,
   unreadableDocument,
 } from "../src/knowledge-base/document.js";
+import { createWikilinkResolver } from "../src/knowledge-base/links.js";
 
 describe("Document interpretation", () => {
   test("builds one complete representation from Cyrillic YAML and GFM", async () => {
@@ -178,6 +179,8 @@ published: true
       sourceMaterials: [],
       attachmentPaths: [],
       properties: [],
+      outgoingLinks: [],
+      backlinks: [],
       diagnostics: [
         {
           code: "DOCUMENT_UNREADABLE",
@@ -185,6 +188,49 @@ published: true
         },
       ],
     });
+  });
+
+  test("renders resolved wikilinks and distinct inert unresolved states", async () => {
+    const resolve = createWikilinkResolver([
+      "Раздел/Источник.md",
+      "Раздел/Цель.md",
+      "а/Дубль.md",
+      "б/Дубль.md",
+    ]);
+    const document = await interpretDocument(
+      "Раздел/Источник.md",
+      "Переход к [[Цель|целевому Документу]], [[Нет]] и [[Дубль]].",
+      { resolveWikilink: resolve },
+    );
+
+    expect(document.html).toContain(
+      'href="/documents/%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB/%D0%A6%D0%B5%D0%BB%D1%8C.md"',
+    );
+    expect(document.html).toContain("wikilink-missing");
+    expect(document.html).toContain("Нет — не найдено");
+    expect(document.html).toContain("wikilink-ambiguous");
+    expect(document.html).toContain("Дубль — неоднозначно");
+    expect(document.outgoingLinks.map(({ state }) => state)).toEqual([
+      "resolved",
+      "missing",
+      "ambiguous",
+    ]);
+    expect(document.diagnostics.map(({ code }) => code)).toEqual([
+      "WIKILINK_MISSING",
+      "WIKILINK_AMBIGUOUS",
+    ]);
+  });
+
+  test("keeps the referenced text inside a bounded backlink snippet", async () => {
+    const resolve = createWikilinkResolver(["Источник.md", "Цель.md"]);
+    const document = await interpretDocument(
+      "Источник.md",
+      `${"далёкий текст ".repeat(30)}переход [[Цель]] в контексте.`,
+      { resolveWikilink: resolve },
+    );
+
+    expect(document.outgoingLinks[0]?.snippet.length).toBeLessThanOrEqual(180);
+    expect(document.outgoingLinks[0]?.snippet).toContain("[[Цель]]");
   });
 });
 

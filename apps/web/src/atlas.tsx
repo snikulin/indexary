@@ -20,6 +20,7 @@ import {
   fetchDocument,
   folderRoute,
   materialUrl,
+  type DocumentRepresentation,
   type MaterialReference,
 } from "./api";
 import { Button } from "./components/ui/button";
@@ -261,27 +262,7 @@ function Context({
         ))}
       </div>
       {documentQuery.data ? (
-        activeSection === ru.properties ? (
-          <section
-            className="properties"
-            role="tabpanel"
-            aria-labelledby="properties-heading"
-          >
-            <h3 id="properties-heading">{ru.properties}</h3>
-            {documentQuery.data.properties.length > 0 ? (
-              <dl>
-                {documentQuery.data.properties.map((property) => (
-                  <div key={property.name}>
-                    <dt>{property.name}</dt>
-                    <dd>{property.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : (
-              <p>{ru.noProperties}</p>
-            )}
-          </section>
-        ) : materialKind !== undefined ? (
+        materialKind !== undefined ? (
           <MaterialPanel
             documentPath={documentQuery.data.path}
             heading={activeSection}
@@ -290,10 +271,10 @@ function Context({
             select={setSelectedMaterialId}
           />
         ) : (
-          <div className="empty-context" role="tabpanel">
-            <FileText aria-hidden="true" />
-            <p>{ru.emptyContext}</p>
-          </div>
+          <ContextSection
+            document={documentQuery.data}
+            section={activeSection}
+          />
         )
       ) : (
         <div className="empty-context">
@@ -402,6 +383,90 @@ function MaterialPanel({
             <p className="empty-materials">{ru.noMaterials}</p>
           )}
         </>
+      )}
+    </section>
+  );
+}
+
+function ContextSection({
+  document,
+  section,
+}: {
+  document: DocumentRepresentation;
+  section: string;
+}) {
+  if (section === ru.outgoingLinks) {
+    return (
+      <section
+        className="relationships"
+        role="tabpanel"
+        aria-labelledby="links-heading"
+      >
+        <h3 id="links-heading">{ru.outgoingLinks}</h3>
+        {document.outgoingLinks.length === 0 ? (
+          <p>{ru.noOutgoingLinks}</p>
+        ) : (
+          <ul aria-label={ru.outgoingLinks}>
+            {document.outgoingLinks.map((link, index) => (
+              <li key={`${link.target}-${index}`}>
+                {link.state === "resolved" && link.path ? (
+                  <a href={documentRoute(link.path)}>{link.label}</a>
+                ) : (
+                  <span className={`relationship-${link.state}`}>
+                    {link.label}
+                  </span>
+                )}
+                <small>{ru.wikilinkState[link.state]}</small>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    );
+  }
+
+  if (section === ru.backlinks) {
+    return (
+      <section
+        className="relationships"
+        role="tabpanel"
+        aria-labelledby="backlinks-heading"
+      >
+        <h3 id="backlinks-heading">{ru.backlinks}</h3>
+        {document.backlinks.length === 0 ? (
+          <p>{ru.noBacklinks}</p>
+        ) : (
+          <ul aria-label={ru.backlinks}>
+            {document.backlinks.map((backlink, index) => (
+              <li key={`${backlink.path}-${index}`}>
+                <a href={documentRoute(backlink.path)}>{backlink.title}</a>
+                <p>{backlink.snippet}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className="properties"
+      role="tabpanel"
+      aria-labelledby="properties-heading"
+    >
+      <h3 id="properties-heading">{ru.properties}</h3>
+      {document.properties.length > 0 ? (
+        <dl>
+          {document.properties.map((property) => (
+            <div key={property.name}>
+              <dt>{property.name}</dt>
+              <dd>{property.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p>{ru.noProperties}</p>
       )}
     </section>
   );

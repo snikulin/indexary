@@ -1,10 +1,19 @@
-import rehypeSanitize from "rehype-sanitize";
+import rehypeSanitize, {
+  defaultSchema,
+  type Options as SanitizeOptions,
+} from "rehype-sanitize";
 import rehypeStringify from "rehype-stringify";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { unified } from "unified";
 import { parseDocument } from "yaml";
+
+import {
+  documentRoute,
+  type ResolveWikilink,
+  type WikilinkState,
+} from "./links.js";
 
 export type DocumentDiagnosticCode =
   | "DOCUMENT_UNREADABLE"
@@ -16,7 +25,9 @@ export type DocumentDiagnosticCode =
   | "ORIGINAL_PATH_INVALID"
   | "PROPERTY_INVALID"
   | "RAW_HTML_REMOVED"
-  | "UNSAFE_URL_REMOVED";
+  | "UNSAFE_URL_REMOVED"
+  | "WIKILINK_MISSING"
+  | "WIKILINK_AMBIGUOUS";
 
 export interface DocumentDiagnostic {
   code: DocumentDiagnosticCode;
@@ -26,6 +37,20 @@ export interface DocumentDiagnostic {
 export interface DocumentProperty {
   name: string;
   value: string;
+}
+
+export interface OutgoingLink {
+  target: string;
+  label: string;
+  state: WikilinkState;
+  path?: string;
+  snippet: string;
+}
+
+export interface Backlink {
+  path: string;
+  title: string;
+  snippet: string;
 }
 
 export interface DocumentRepresentation<DocumentPath extends string = string> {
@@ -38,6 +63,12 @@ export interface DocumentRepresentation<DocumentPath extends string = string> {
   attachmentPaths: string[];
   properties: DocumentProperty[];
   diagnostics: DocumentDiagnostic[];
+  outgoingLinks: OutgoingLink[];
+  backlinks: Backlink[];
+}
+
+export interface InterpretDocumentOptions {
+  resolveWikilink?: ResolveWikilink;
 }
 
 interface MarkdownNode {
@@ -47,6 +78,10 @@ interface MarkdownNode {
   alt?: string | null;
   depth?: number;
   children?: MarkdownNode[];
+  data?: {
+    hName?: string;
+    hProperties?: Record<string, unknown>;
+  };
 }
 
 const diagnosticMessages: Record<DocumentDiagnosticCode, string> = {
@@ -61,6 +96,24 @@ const diagnosticMessages: Record<DocumentDiagnosticCode, string> = {
   PROPERTY_INVALID: "Одно из свойств Документа имеет неподдерживаемый вид.",
   RAW_HTML_REMOVED: "Небезопасный HTML удалён из Документа.",
   UNSAFE_URL_REMOVED: "Ссылка с небезопасной схемой отключена.",
+  WIKILINK_MISSING: "Одна или несколько вики-ссылок не найдены.",
+  WIKILINK_AMBIGUOUS:
+    "Одна или несколько вики-ссылок имеют несколько возможных целей.",
+};
+
+const documentSanitizeSchema: SanitizeOptions = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    a: [
+      ...(defaultSchema.attributes?.a ?? []),
+      ["className", "wikilink", "wikilink-resolved"],
+    ],
+    span: [
+      ...(defaultSchema.attributes?.span ?? []),
+      ["className", "wikilink", "wikilink-missing", "wikilink-ambiguous"],
+    ],
+  },
 };
 
 function addDiagnostic(
@@ -312,6 +365,143 @@ function makeText(value: string): MarkdownNode {
   return { type: "text", value };
 }
 
+function safeSnippet(value: string, focus: string): string {
+  const normalized = [...value]
+    .map((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 31 || codePoint === 127 ? " " : character;
+    })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.length <= 180) {
+    return normalized;
+  }
+  const normalizedFocus = focus.replace(/\s+/g, " ");
+  const focusIndex = normalized.indexOf(normalizedFocus);
+  const desiredStart = focusIndex === -1 ? 0 : focusIndex - 70;
+  const start = Math.max(0, Math.min(desiredStart, normalized.length - 178));
+  const end = Math.min(normalized.length, start + 178);
+  return `${start > 0 ? "…" : ""}${normalized.slice(start, end).trim()}${
+    end < normalized.length ? "…" : ""
+  }`;
+}
+
+function unresolvedWikilink(
+  label: string,
+  state: Exclude<WikilinkState, "resolved">,
+): MarkdownNode {
+  const status = state === "missing" ? "не найдено" : "неоднозначно";
+  return {
+    type: "emphasis",
+    data: {
+      hName: "span",
+      hProperties: {
+        className: ["wikilink", `wikilink-${state}`],
+      },
+    },
+    children: [makeText(label), makeText(` — ${status}`)],
+  };
+}
+
+function interpretWikilinks(
+  tree: MarkdownNode,
+  documentPath: string,
+  resolveWikilink: ResolveWikilink | undefined,
+  diagnostics: DocumentDiagnostic[],
+): OutgoingLink[] {
+  const links: OutgoingLink[] = [];
+  const wikilinkPattern = /\[\[([^\]\r\n]+)\]\]/g;
+
+  function visit(node: MarkdownNode, inheritedSnippet = ""): void {
+    if (node.children === undefined) {
+      return;
+    }
+    const snippetSource = ["paragraph", "heading", "tableCell"].includes(
+      node.type,
+    )
+      ? textContent(node)
+      : inheritedSnippet;
+
+    node.children = node.children.flatMap((child) => {
+      if (
+        child.type === "link" ||
+        child.type === "inlineCode" ||
+        child.type === "code"
+      ) {
+        return [child];
+      }
+      if (child.type !== "text" || child.value === undefined) {
+        visit(child, snippetSource);
+        return [child];
+      }
+
+      const replacements: MarkdownNode[] = [];
+      let start = 0;
+      for (const match of child.value.matchAll(wikilinkPattern)) {
+        const index = match.index;
+        if (index > start) {
+          replacements.push(makeText(child.value.slice(start, index)));
+        }
+        const expression = match[1] ?? "";
+        const separator = expression.indexOf("|");
+        const target = (
+          separator === -1 ? expression : expression.slice(0, separator)
+        ).trim();
+        const alias =
+          separator === -1 ? "" : expression.slice(separator + 1).trim();
+        const label = alias || target || "Вики-ссылка";
+        const resolution = resolveWikilink?.(documentPath, target) ?? {
+          state: "missing" as const,
+        };
+        const link: OutgoingLink = {
+          target,
+          label,
+          state: resolution.state,
+          ...(resolution.path === undefined ? {} : { path: resolution.path }),
+          snippet: safeSnippet(snippetSource || child.value, match[0]),
+        };
+        links.push(link);
+
+        if (resolution.state === "resolved" && resolution.path !== undefined) {
+          replacements.push({
+            type: "link",
+            url: documentRoute(resolution.path),
+            data: {
+              hProperties: { className: ["wikilink", "wikilink-resolved"] },
+            },
+            children: [makeText(label)],
+          });
+        } else {
+          addDiagnostic(
+            diagnostics,
+            resolution.state === "ambiguous"
+              ? "WIKILINK_AMBIGUOUS"
+              : "WIKILINK_MISSING",
+          );
+          replacements.push(
+            unresolvedWikilink(
+              label,
+              resolution.state === "ambiguous" ? "ambiguous" : "missing",
+            ),
+          );
+        }
+        start = index + match[0].length;
+      }
+      if (start === 0) {
+        return [child];
+      }
+      if (start < child.value.length) {
+        replacements.push(makeText(child.value.slice(start)));
+      }
+      return replacements;
+    });
+  }
+
+  visit(tree);
+  return links;
+}
+
 function secureMarkdown(
   node: MarkdownNode,
   diagnostics: DocumentDiagnostic[],
@@ -364,6 +554,7 @@ function normalizeSearchableText(values: readonly string[]): string {
 export async function interpretDocument<DocumentPath extends string>(
   documentPath: DocumentPath,
   markdown: string,
+  options: InterpretDocumentOptions = {},
 ): Promise<DocumentRepresentation<DocumentPath>> {
   const diagnostics: DocumentDiagnostic[] = [];
   const separated = splitFrontmatter(markdown);
@@ -431,12 +622,18 @@ export async function interpretDocument<DocumentPath extends string>(
     properties.push({ name, value: readable });
   }
 
+  const outgoingLinks = interpretWikilinks(
+    tree,
+    documentPath,
+    options.resolveWikilink,
+    diagnostics,
+  );
   const bodyText = textContent(tree);
   const attachmentPaths = collectAttachmentPaths(tree);
   secureMarkdown(tree, diagnostics);
   const renderer = unified()
     .use(remarkRehype)
-    .use(rehypeSanitize)
+    .use(rehypeSanitize, documentSanitizeSchema)
     .use(rehypeStringify);
   const renderedTree = await renderer.run(tree as never);
   const html = renderer.stringify(renderedTree);
@@ -457,6 +654,8 @@ export async function interpretDocument<DocumentPath extends string>(
     attachmentPaths,
     properties,
     diagnostics,
+    outgoingLinks,
+    backlinks: [],
   };
 }
 
@@ -472,6 +671,8 @@ export function unreadableDocument<DocumentPath extends string>(
     sourceMaterials: [],
     attachmentPaths: [],
     properties: [],
+    outgoingLinks: [],
+    backlinks: [],
     diagnostics: [
       {
         code: "DOCUMENT_UNREADABLE",

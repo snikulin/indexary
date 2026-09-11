@@ -472,6 +472,56 @@ original_path: materials/legacy.eml
     expect(response.body).not.toContain(outside);
     await app.close();
   });
+
+  test("serves deterministic wikilinks and backlinks through the validated API", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-links-app-"));
+    temporaryDirectories.push(root);
+    for (const folder of ["Раздел", "Глубже", "а", "б"]) {
+      await mkdir(path.join(root, folder));
+    }
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    await writeFile(path.join(root, "Цель.md"), "# Цель в корне\n");
+    await writeFile(path.join(root, "Раздел", "Цель.md"), "# Цель рядом\n");
+    await writeFile(
+      path.join(root, "Глубже", "Уникальная.md"),
+      "# Уникальная\n",
+    );
+    await writeFile(path.join(root, "а", "Дубль.md"), "# Дубль А\n");
+    await writeFile(path.join(root, "б", "Дубль.md"), "# Дубль Б\n");
+    await writeFile(
+      path.join(root, "Раздел", "Источник.md"),
+      "# Источник\n\n[[Цель]], [[/Цель]], [[Уникальная]], [[Нет]] и [[Дубль]].\n",
+    );
+    const before = await captureTree(root);
+    const app = await buildApplication(config(root));
+    await app.ready();
+
+    const source = await app.inject({
+      method: "GET",
+      url: "/api/documents",
+      query: { path: "Раздел/Источник.md" },
+    });
+    expect(source.statusCode).toBe(200);
+    expect(source.json().outgoingLinks).toMatchObject([
+      { state: "resolved", path: "Раздел/Цель.md" },
+      { state: "resolved", path: "Цель.md" },
+      { state: "resolved", path: "Глубже/Уникальная.md" },
+      { state: "missing" },
+      { state: "ambiguous" },
+    ]);
+
+    const target = await app.inject({
+      method: "GET",
+      url: "/api/documents",
+      query: { path: "Раздел/Цель.md" },
+    });
+    expect(target.statusCode).toBe(200);
+    expect(target.json().backlinks).toMatchObject([
+      { path: "Раздел/Источник.md", title: "Источник" },
+    ]);
+    await app.close();
+    expect(await captureTree(root)).toEqual(before);
+  });
 });
 
 describe("byte range parsing", () => {

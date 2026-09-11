@@ -347,6 +347,20 @@ input:focus-visible {
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
+.document-body .wikilink-missing,
+.document-body .wikilink-ambiguous {
+  padding: 0.08em 0.28em;
+  border-radius: 4px;
+  font-style: normal;
+}
+.document-body .wikilink-missing {
+  background: #f3e4d4;
+  color: #79513b;
+}
+.document-body .wikilink-ambiguous {
+  background: #eee2b9;
+  color: #65551f;
+}
 .document-body blockquote {
   margin: 24px 0;
   padding-left: 20px;
@@ -475,14 +489,56 @@ input:focus-visible {
 .properties {
   padding: 22px 2px;
 }
-.properties h3 {
+.properties h3,
+.relationships h3 {
   margin: 0 0 14px;
   font-family: Georgia, serif;
   font-size: 16px;
 }
-.properties > p {
+.properties > p,
+.relationships > p {
   color: #858880;
   font-size: 13px;
+}
+.relationships {
+  padding: 22px 2px;
+}
+.relationships ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.relationships li {
+  padding: 11px 0;
+  border-bottom: 1px solid #ddd8cc;
+}
+.relationships a,
+.relationships li > span {
+  display: block;
+  color: #5b3827;
+  font-size: 13px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.relationships .relationship-missing {
+  color: #8b5538;
+}
+.relationships .relationship-ambiguous {
+  color: #746021;
+}
+.relationships small {
+  display: block;
+  margin-top: 3px;
+  color: #858880;
+  font-size: 11px;
+}
+.relationships li p {
+  margin: 7px 0 0;
+  color: #686d65;
+  font-size: 12px;
+  line-height: 1.45;
 }
 .properties dl {
   margin: 0;

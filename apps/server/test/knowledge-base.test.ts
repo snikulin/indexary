@@ -226,12 +226,12 @@ describe("Knowledge Base", () => {
     expect(fixtureCatalog).toBeDefined();
     expect(personalCatalog).toBeDefined();
     expect(fixtureCatalog).not.toBe(personalCatalog);
-    expect(fixtureCatalog).toContain(`catalog-v1${path.sep}fixture`);
+    expect(fixtureCatalog).toContain(`catalog-v2${path.sep}fixture`);
     const database = new DatabaseSync(path.join(cacheRoot, fixtureCatalog!), {
       readOnly: true,
     });
     expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 1,
+      user_version: 2,
     });
     database.close();
 
@@ -245,6 +245,108 @@ describe("Knowledge Base", () => {
       path: "Новый.md",
       title: "Новый",
     });
+  });
+
+  test("derives outgoing links and safe backlinks from the rendered interpretation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-graph-"));
+    temporaryDirectories.push(root);
+    await Promise.all(
+      ["Раздел", "Глубже", "а", "б"].map((folder) =>
+        mkdir(path.join(root, folder)),
+      ),
+    );
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    await writeFile(path.join(root, "Цель.md"), "# Корневая цель\n");
+    await writeFile(path.join(root, "Раздел", "Цель.md"), "# Локальная цель\n");
+    await writeFile(
+      path.join(root, "Глубже", "Единственная.md"),
+      "# Единственная\n",
+    );
+    await writeFile(path.join(root, "а", "Дубль.md"), "# Первый дубль\n");
+    await writeFile(path.join(root, "б", "Дубль.md"), "# Второй дубль\n");
+    await writeFile(
+      path.join(root, "Раздел", "Источник.md"),
+      `# Источник
+
+Безопасный контекст [[Цель|локальная цель]] после. <script>alert("secret")</script>
+
+Корневая [[/Цель]], уникальная [[Единственная]], отсутствует [[Нет]] и неоднозначна [[Дубль]].
+`,
+    );
+    const before = await captureTree(root);
+    const knowledgeBase = await createTestKnowledgeBase(root, "graph");
+    await knowledgeBase.initialize();
+
+    const source = await knowledgeBase.openDocument("Раздел/Источник.md");
+    expect(source?.outgoingLinks).toMatchObject([
+      { label: "локальная цель", state: "resolved", path: "Раздел/Цель.md" },
+      { state: "resolved", path: "Цель.md" },
+      { state: "resolved", path: "Глубже/Единственная.md" },
+      { state: "missing" },
+      { state: "ambiguous" },
+    ]);
+    expect(source?.html).toContain(
+      "/documents/%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB/%D0%A6%D0%B5%D0%BB%D1%8C.md",
+    );
+    expect(source?.html).toContain("wikilink-missing");
+    expect(source?.html).toContain("wikilink-ambiguous");
+
+    const localTarget = await knowledgeBase.openDocument("Раздел/Цель.md");
+    expect(localTarget?.backlinks).toMatchObject([
+      {
+        path: "Раздел/Источник.md",
+        title: "Источник",
+      },
+    ]);
+    expect(localTarget?.backlinks[0]?.snippet).toContain(
+      "Безопасный контекст [[Цель|локальная цель]] после.",
+    );
+    expect(JSON.stringify(localTarget?.backlinks)).not.toContain("<script>");
+    expect(await captureTree(root)).toEqual(before);
+  });
+
+  test("rebuilds the same graph regardless of file creation order", async () => {
+    const roots = await Promise.all([
+      mkdtemp(path.join(os.tmpdir(), "indexary-order-a-")),
+      mkdtemp(path.join(os.tmpdir(), "indexary-order-b-")),
+    ]);
+    temporaryDirectories.push(...roots);
+    const documents = new Map([
+      ["index.md", "# Главная\n\n[[Цель]] и [[Дубль]].\n"],
+      ["папка/Цель.md", "# Цель\n"],
+      ["а/Дубль.md", "# Дубль А\n"],
+      ["б/Дубль.md", "# Дубль Б\n"],
+    ]);
+
+    for (const [rootIndex, root] of roots.entries()) {
+      const entries = [...documents.entries()];
+      if (rootIndex === 1) {
+        entries.reverse();
+      }
+      for (const [relativePath, content] of entries) {
+        await mkdir(path.dirname(path.join(root, relativePath)), {
+          recursive: true,
+        });
+        await writeFile(path.join(root, relativePath), content);
+      }
+    }
+
+    const graphs = [];
+    for (const [index, root] of roots.entries()) {
+      const knowledgeBase = await createTestKnowledgeBase(
+        root,
+        `order-${index}`,
+      );
+      await knowledgeBase.initialize();
+      graphs.push({
+        home: await knowledgeBase.openHomeDocument(),
+        target: await knowledgeBase.openDocument("папка/Цель.md"),
+      });
+    }
+    expect(graphs[0]?.home?.outgoingLinks).toEqual(
+      graphs[1]?.home?.outgoingLinks,
+    );
+    expect(graphs[0]?.target?.backlinks).toEqual(graphs[1]?.target?.backlinks);
   });
 
   test("refuses a cache symlink that would write inside the Knowledge Base", async () => {

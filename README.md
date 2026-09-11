@@ -3,8 +3,9 @@
 **An open-source, local-first web interface for exploring filesystem-based knowledge bases.**
 
 > Project status: the production-shaped Atlas opens the Home Document and browses the
-> complete nested Document catalog through React, Fastify, and a rebuildable SQLite cache;
-> the rest of the v1 behaviors are under active implementation.
+> complete nested Document catalog, follows deterministic wikilinks and backlinks, and
+> previews referenced Source Materials and Attachments through React, Fastify, and a
+> rebuildable SQLite cache; the rest of the v1 behaviors are under active implementation.
 
 ## Overview
 

@@ -31,6 +31,11 @@ const NotReadyResponse = Type.Object(
   },
   { additionalProperties: false },
 );
+const WikilinkState = Type.Union([
+  Type.Literal("resolved"),
+  Type.Literal("missing"),
+  Type.Literal("ambiguous"),
+]);
 const DocumentResponse = Type.Object(
   {
     path: Type.String({ minLength: 1 }),
@@ -128,6 +133,28 @@ const DocumentResponse = Type.Object(
         {
           code: Type.String({ minLength: 1 }),
           message: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    outgoingLinks: Type.Array(
+      Type.Object(
+        {
+          target: Type.String(),
+          label: Type.String({ minLength: 1 }),
+          state: WikilinkState,
+          path: Type.Optional(Type.String({ minLength: 1 })),
+          snippet: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    backlinks: Type.Array(
+      Type.Object(
+        {
+          path: Type.String({ minLength: 1 }),
+          title: Type.String({ minLength: 1 }),
+          snippet: Type.String(),
         },
         { additionalProperties: false },
       ),

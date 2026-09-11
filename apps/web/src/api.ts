@@ -11,6 +11,14 @@ export interface DocumentRepresentation {
   };
   properties: Array<{ name: string; value: string }>;
   diagnostics: Array<{ code: string; message: string }>;
+  outgoingLinks: Array<{
+    target: string;
+    label: string;
+    state: "resolved" | "missing" | "ambiguous";
+    path?: string;
+    snippet: string;
+  }>;
+  backlinks: Array<{ path: string; title: string; snippet: string }>;
 }
 
 export interface MaterialReference {

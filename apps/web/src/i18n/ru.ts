@@ -33,6 +33,13 @@ export const ru = {
   unknownSize: "Неизвестен",
   openMaterial: "Открыть материал",
   pdfPreview: "Предпросмотр PDF",
+  noOutgoingLinks: "У Документа нет исходящих ссылок.",
+  noBacklinks: "На Документ пока нет обратных ссылок.",
+  wikilinkState: {
+    resolved: "Документ найден",
+    missing: "Документ не найден",
+    ambiguous: "Найдено несколько Документов",
+  },
   contextSections: "Разделы контекста",
   emptyContext: "Для этого Документа пока нет связанных данных.",
   loading: "Открываем Домашний документ…",

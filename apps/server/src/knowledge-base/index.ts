@@ -16,12 +16,14 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   interpretDocument,
+  type Backlink,
   type DocumentRepresentation,
   unreadableDocument,
 } from "./document.js";
+import { createWikilinkResolver } from "./links.js";
 
 const HOME_DOCUMENT_PATH = "index.md";
-const CATALOG_VERSION = 1;
+const CATALOG_VERSION = 2;
 
 export type KnowledgeBaseStatus =
   | { state: "initializing" }
@@ -650,6 +652,18 @@ async function buildCatalog(
         message TEXT NOT NULL,
         PRIMARY KEY (path, code)
       ) STRICT;
+      CREATE TABLE link_edges (
+        source_path TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        target TEXT NOT NULL,
+        label TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('resolved', 'missing', 'ambiguous')),
+        target_path TEXT,
+        snippet TEXT NOT NULL,
+        PRIMARY KEY (source_path, ordinal),
+        FOREIGN KEY (source_path) REFERENCES documents(path),
+        FOREIGN KEY (target_path) REFERENCES documents(path)
+      ) STRICT;
       CREATE TABLE catalog_metadata (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -671,6 +685,13 @@ async function buildCatalog(
         mime_type, size, preview, diagnostic_code, diagnostic_message
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertLink = database.prepare(
+      "INSERT INTO link_edges(source_path, ordinal, target, label, state, target_path, snippet) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    const resolveWikilink = createWikilinkResolver(
+      discovery.documents.map((document) => document.path),
+    );
+    const interpretedDocuments: DocumentRepresentation[] = [];
     database.exec("BEGIN IMMEDIATE");
     for (const folder of discovery.folders) {
       insertFolder.run(folder.path, folder.parentPath ?? null, folder.name);
@@ -681,6 +702,7 @@ async function buildCatalog(
         document = await interpretDocument(
           discovered.path,
           await readFile(discovered.canonicalPath, "utf8"),
+          { resolveWikilink },
         );
       } catch {
         document = unreadableDocument(discovered.path);
@@ -693,6 +715,7 @@ async function buildCatalog(
         document.title,
         JSON.stringify(document),
       );
+      interpretedDocuments.push(document);
       const sourceMaterials = await Promise.all(
         document.sourceMaterials.map((reference, position) =>
           inspectMaterial(
@@ -743,6 +766,19 @@ async function buildCatalog(
           material.preview,
           material.diagnostic?.code ?? null,
           material.diagnostic?.message ?? null,
+        );
+      }
+    }
+    for (const document of interpretedDocuments) {
+      for (const [ordinal, link] of document.outgoingLinks.entries()) {
+        insertLink.run(
+          document.path,
+          ordinal,
+          link.target,
+          link.label,
+          link.state,
+          link.path ?? null,
+          link.snippet,
         );
       }
     }
@@ -927,10 +963,25 @@ export function createKnowledgeBase(
         const interpreted = JSON.parse(
           String(row.representation_json),
         ) as DocumentRepresentation;
+        const backlinkRows = database
+          .prepare(
+            `SELECT links.source_path AS path, documents.title, links.snippet
+             FROM link_edges AS links
+             JOIN documents ON documents.path = links.source_path
+             WHERE links.state = 'resolved' AND links.target_path = ?
+             ORDER BY links.source_path, links.ordinal`,
+          )
+          .all(normalized) as unknown as SqliteRow[];
+        const backlinks: Backlink[] = backlinkRows.map((backlink) => ({
+          path: String(backlink.path),
+          title: String(backlink.title),
+          snippet: String(backlink.snippet),
+        }));
         const { attachmentPaths, ...document } = interpreted;
         void attachmentPaths;
         return {
           ...document,
+          backlinks,
           materials: {
             sourceMaterials: materials.filter(
               (material) => material.kind === "source-material",

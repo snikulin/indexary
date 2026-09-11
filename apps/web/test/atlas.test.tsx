@@ -29,6 +29,34 @@ const home = {
       message: "Ссылка с небезопасной схемой отключена.",
     },
   ],
+  outgoingLinks: [
+    {
+      target: "Раздел/Цель",
+      label: "Цель",
+      state: "resolved" as const,
+      path: "Раздел/Цель.md",
+      snippet: "Перейти к [[Раздел/Цель|Цели]].",
+    },
+    {
+      target: "Пропавшая",
+      label: "Пропавшая",
+      state: "missing" as const,
+      snippet: "[[Пропавшая]]",
+    },
+    {
+      target: "Дубль",
+      label: "Дубль",
+      state: "ambiguous" as const,
+      snippet: "[[Дубль]]",
+    },
+  ],
+  backlinks: [
+    {
+      path: "Источник.md",
+      title: "Источник",
+      snippet: '<img src=x onerror="alert(1)"> ссылается на Документ.',
+    },
+  ],
 };
 
 const rootCatalog = {
@@ -250,5 +278,32 @@ describe("Atlas", () => {
     expect(
       screen.getByRole("heading", { name: "Домашний документ" }),
     ).toBeInTheDocument();
+  });
+
+  test("shows navigable links, inert unresolved states, and escaped backlinks", async () => {
+    stubSuccessfulRequests();
+    renderAtlas();
+    await screen.findByRole("heading", { name: "Домашний документ" });
+
+    fireEvent.click(screen.getByRole("tab", { name: "Ссылки" }));
+    expect(screen.getByRole("link", { name: "Цель" })).toHaveAttribute(
+      "href",
+      documentRoute("Раздел/Цель.md"),
+    );
+    expect(
+      screen.queryByRole("link", { name: "Пропавшая" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Пропавшая")).toHaveClass("relationship-missing");
+    expect(screen.getByText("Дубль")).toHaveClass("relationship-ambiguous");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Обратные ссылки" }));
+    expect(screen.getByRole("link", { name: "Источник" })).toHaveAttribute(
+      "href",
+      documentRoute("Источник.md"),
+    );
+    expect(
+      screen.getByText('<img src=x onerror="alert(1)"> ссылается на Документ.'),
+    ).toBeInTheDocument();
+    expect(document.querySelector("img")).toBeNull();
   });
 });

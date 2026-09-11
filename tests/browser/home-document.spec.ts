@@ -116,3 +116,46 @@ test("previews and switches referenced materials in the Document context", async
     page.getByRole("heading", { name: "Путеводитель", level: 1 }),
   ).toBeVisible();
 });
+
+test("follows a wikilink and its backlink with browser history", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .locator(".document-body")
+    .getByRole("link", { name: "Путеводитель" })
+    .click();
+  await expect(page).toHaveURL(
+    /\/documents\/%D0%9F%D1%83%D1%82%D0%B5%D0%B2%D0%BE%D0%B4%D0%B8%D1%82%D0%B5%D0%BB%D1%8C\.md$/,
+  );
+
+  await expect(
+    page.locator(".document-body").getByText("Несуществующий — не найдено"),
+  ).toBeVisible();
+  await expect(
+    page.locator(".document-body").getByText("Общее — неоднозначно"),
+  ).toBeVisible();
+  await expect(
+    page.locator(".document-body").getByRole("link", {
+      name: "Проектом Альфа",
+    }),
+  ).toBeVisible();
+
+  await page.getByRole("tab", { name: "Обратные ссылки" }).click();
+  await page
+    .getByRole("list", { name: "Обратные ссылки" })
+    .getByRole("link", { name: "Добро пожаловать в Индексари" })
+    .click();
+  await expect(page).toHaveURL("http://127.0.0.1:4199/documents/index.md");
+  await page.goBack();
+  await expect(
+    page.getByRole("heading", { name: "Путеводитель", level: 1 }),
+  ).toBeVisible();
+  await page.goForward();
+  await expect(
+    page.getByRole("heading", {
+      name: "Добро пожаловать в Индексари",
+      level: 1,
+    }),
+  ).toBeVisible();
+});
