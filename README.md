@@ -3,9 +3,9 @@
 **An open-source, local-first web interface for exploring filesystem-based knowledge bases.**
 
 > Project status: the complete read-only Atlas is verified for daily use from this
-> checkout against the synthetic Knowledge Base. The separate personal production
-> milestone—immutable releases, systemd operation, Tailscale activation, and tested
-> rollback—is still pending.
+> checkout. Immutable per-user releases and the systemd user-service lifecycle are
+> implemented. Safe deploy/rollback, Tailscale activation, and the human production
+> checkpoint remain pending.
 
 ## Overview
 
@@ -115,12 +115,23 @@ Install the pinned toolchain with `mise install`, then use the public task inter
 - `mise run perf:index` checks the generated 10,000-Document support target;
 - `mise run smoke:kb`, with an existing non-empty `INDEXARY_KB_PATH`, starts
   the privacy-safe manual personal smoke and verifies that the selected
-  Knowledge Base has the same bytes after the session.
+  Knowledge Base has the same bytes after the session;
+- `mise run release` assembles a clean commit as an immutable release containing
+  the exact Node 24 Linux x64 runtime and production application;
+- `mise run smoke:release -- <release-directory>` checks that release directly
+  outside the checkout and through an isolated transient systemd user service;
+- `mise run install:service -- <release> <absolute-kb> [port]` installs and
+  verifies the persistent user service;
+- `mise run verify:service` rechecks the installed service and the byte-for-byte
+  read-only boundary.
 
 Dependency installation is frozen by the lockfile, and every public task that can touch the
 synthetic Knowledge Base verifies that its tree remains byte-for-byte unchanged.
 The [daily-use checkout evidence](docs/daily-use-checkout.md) records the
 reproducible gate and the content-safe manual personal checklist.
+The [operations guide](docs/operations.md) describes the installed XDG layout,
+host prerequisites, diagnostics, and the boundary before deployment and private
+network cutover.
 
 ## License
 

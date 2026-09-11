@@ -36,16 +36,37 @@ The stable project interface is:
 - `mise run perf:index`: verify the generated v1 indexing and search support target;
 - `mise run smoke:kb`, with an existing non-empty `INDEXARY_KB_PATH`: run the
   content-safe manual personal Knowledge Base smoke with a byte-for-byte
-  boundary check.
+  boundary check;
+- `mise run release`: build optimized outputs and assemble a clean git commit as
+  an immutable per-user release;
+- `mise run smoke:release -- <release-directory>`: exercise the bundled runtime
+  both directly outside the checkout and under an isolated transient systemd
+  user service;
+- `mise run install:service -- <release> <absolute-kb> [port]`: install, enable,
+  start, restart, and verify the persistent user service;
+- `mise run verify:service`: verify the active release, service state, local
+  application behavior, structured journal, and read-only boundary again.
 
 Package-level scripts and granular checks are workspace implementation details, not a second public task interface.
 
 `mise run check` comprises formatting verification, linting, type checking,
 focused server and web tests, assembled Fastify integration tests against real
 temporary files and SQLite FTS5, an optimized application build, and the short
-Playwright smoke. The named package scripts make every part visible in the gate
-output. Personal Knowledge Bases, Firefox confirmation, and performance
-benchmarks are deliberately outside this non-personal quality gate.
+Playwright smoke. It also verifies production XDG placement, unit/config
+rendering, release manifests, atomic selection, service orchestration seams, and
+that the deployed server package contains production dependencies without
+source or test trees. The named package scripts make every part visible in the
+gate output. Personal Knowledge Bases, Firefox confirmation, full release
+assembly, transient-systemd smoke, and performance benchmarks are deliberately
+outside this non-personal quality gate.
+
+Release assembly requires a completely clean checkout, the pinned Node
+24.21.0 Linux x64 runtime selected by `mise`, and existing optimized web/server
+outputs. The public `mise run release` task provides those outputs and rejects a
+dirty or unidentifiable source state. It does not select or start the result.
+Use `mise run smoke:release` for isolated artifact evidence before installing
+it. See [operations.md](operations.md) before running the persistent installation
+task.
 
 ## Development data
 

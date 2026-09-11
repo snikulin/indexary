@@ -53,3 +53,42 @@ run = "pnpm --filter @indexary/server build && node scripts/verify-index-interru
 description = "Run the complete local quality gate"
 depends = ["_install"]
 run = "node scripts/verify-fixture-read-only.mjs -- pnpm run check:workspace"
+
+[tasks.release]
+description = "Build an immutable per-user production release"
+depends = ["_install"]
+run = "pnpm run build:workspace && node scripts/production/cli.mjs build-release"
+
+[tasks."install:service"]
+description = "Install, start, restart, and verify the systemd user service"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -lt 2 || $# -gt 3 || -z "$1" || -z "$2" ]]; then
+  echo "Usage: mise run install:service -- <release-directory> <absolute-knowledge-base-path> [port]" >&2
+  exit 2
+fi
+args=(install-service --release "$1" --knowledge-base "$2")
+if [[ $# -eq 3 ]]; then
+  args+=(--port "$3")
+fi
+node scripts/production/cli.mjs "${args[@]}"
+'''
+
+[tasks."verify:service"]
+description = "Verify the installed user service and read-only boundary"
+run = "node scripts/production/cli.mjs verify-service"
+
+[tasks."smoke:release"]
+description = "Verify a release outside the checkout and through a transient user service"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -lt 1 || $# -gt 2 || -z "$1" ]]; then
+  echo "Usage: mise run smoke:release -- <release-directory> [absolute-knowledge-base-path]" >&2
+  exit 2
+fi
+knowledge_base="${2:-$PWD/fixtures/knowledge-base}"
+node scripts/production/cli.mjs smoke-release --release "$1" --knowledge-base "$knowledge_base"
+node scripts/production/cli.mjs smoke-release --release "$1" --knowledge-base "$knowledge_base" --managed
+'''

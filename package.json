@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build:workspace": "pnpm --filter @indexary/web build && pnpm --filter @indexary/server build",
-    "check:workspace": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:focused && pnpm test:integration && pnpm build:workspace && pnpm test:browser:smoke",
+    "check:workspace": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:focused && pnpm test:integration && pnpm build:workspace && pnpm test:production && pnpm test:browser:smoke",
     "dev": "pnpm --filter @indexary/web build && pnpm --filter @indexary/server dev --web-root apps/web/dist",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -17,6 +17,7 @@
     "test:browser:smoke": "playwright test tests/browser/home-document.spec.ts tests/browser/accessibility.spec.ts",
     "test:focused": "pnpm --filter @indexary/server test:focused && pnpm --filter @indexary/web test",
     "test:integration": "pnpm --filter @indexary/server test:integration",
+    "test:production": "node --test scripts/production/production.test.mjs",
     "test:workspace": "pnpm test:focused && pnpm test:integration",
     "typecheck": "pnpm --recursive --if-present typecheck"
   },
