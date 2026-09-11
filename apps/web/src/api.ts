@@ -53,14 +53,35 @@ export interface SearchResponse {
   results: SearchResult[];
 }
 
+export class ApiRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(`INDEXARY_REQUEST_FAILED_${status}`);
+    this.name = "ApiRequestError";
+  }
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
     headers: { accept: "application/json" },
   });
   if (!response.ok) {
-    throw new Error(`INDEXARY_REQUEST_FAILED_${response.status}`);
+    let code: string | undefined;
+    try {
+      const body = (await response.json()) as { code?: unknown };
+      code = typeof body.code === "string" ? body.code : undefined;
+    } catch {
+      // Error bodies are optional. UI state is selected from the HTTP status.
+    }
+    throw new ApiRequestError(response.status, code);
   }
   return (await response.json()) as T;
+}
+
+export function isMissingRequest(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.status === 404;
 }
 
 export function documentRoute(documentPath: string): string {

@@ -1,6 +1,15 @@
 import { defineConfig } from "@playwright/test";
 
 const repositoryRoot = import.meta.dirname;
+const requestedBrowser = process.env.INDEXARY_BROWSER;
+const browserName =
+  requestedBrowser === "firefox" || requestedBrowser === "webkit"
+    ? requestedBrowser
+    : "chromium";
+const executablePath =
+  browserName === "chromium"
+    ? (process.env.CHROMIUM_PATH ?? "/usr/bin/chromium")
+    : undefined;
 
 export default defineConfig({
   testDir: "./tests/browser",
@@ -10,11 +19,9 @@ export default defineConfig({
   reporter: "line",
   use: {
     baseURL: "http://127.0.0.1:4199",
-    browserName: "chromium",
+    browserName,
     headless: true,
-    launchOptions: {
-      executablePath: process.env.CHROMIUM_PATH ?? "/usr/bin/chromium",
-    },
+    launchOptions: executablePath === undefined ? {} : { executablePath },
   },
   webServer: {
     command:

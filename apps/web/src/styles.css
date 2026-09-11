@@ -32,7 +32,10 @@ a {
 }
 button:focus-visible,
 a:focus-visible,
-input:focus-visible {
+input:focus-visible,
+[role="tabpanel"]:focus-visible,
+[role="dialog"]:focus-visible,
+[role="status"]:focus-visible {
   outline: 3px solid #d87845;
   outline-offset: 2px;
 }
@@ -47,6 +50,23 @@ input:focus-visible {
 }
 .app-shell {
   min-height: 100vh;
+}
+.application-content[inert] {
+  user-select: none;
+}
+.skip-link {
+  position: fixed;
+  z-index: 50;
+  top: 8px;
+  left: 8px;
+  padding: 10px 14px;
+  border-radius: 7px;
+  transform: translateY(-160%);
+  background: #30483b;
+  color: #fff;
+}
+.skip-link:focus {
+  transform: translateY(0);
 }
 .topbar {
   height: 68px;
@@ -141,23 +161,20 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 9px 10px;
   border: 1px solid #d6d1c5;
   border-radius: 8px;
   background: #f9f7f1;
   color: #8a8c85;
   cursor: pointer;
+  text-align: left;
 }
 .search-field svg {
   width: 16px;
 }
-.search-field input {
-  width: 100%;
-  border: 0;
-  outline: 0;
-  background: transparent;
+.search-field span {
   font-size: 13px;
-  cursor: pointer;
 }
 .tree-label {
   margin-top: 28px;
@@ -202,6 +219,12 @@ input:focus-visible {
   color: #7a7d74;
   font-size: 13px;
   line-height: 1.45;
+}
+.tree-status p {
+  margin: 0 0 10px;
+}
+.tree-status .button {
+  font-size: 12px;
 }
 .recent-item {
   color: #686d65;
@@ -330,6 +353,10 @@ input:focus-visible {
 }
 .document-diagnostics p {
   margin: 4px 0;
+}
+.document-diagnostics strong {
+  display: block;
+  margin-bottom: 7px;
 }
 .document-body h1,
 .document-body h2,
@@ -840,7 +867,7 @@ input:focus-visible {
   line-height: 1.4;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 1100px) {
   .mobile-only {
     display: inline-grid;
   }
@@ -879,6 +906,10 @@ input:focus-visible {
     inset: 0 auto 0 0;
     width: min(88vw, 360px);
     box-shadow: 10px 0 35px rgb(25 31 25 / 22%);
+  }
+  .drawer-context {
+    inset: 0 0 0 auto;
+    box-shadow: -10px 0 35px rgb(25 31 25 / 22%);
   }
   .search-layer {
     align-items: stretch;

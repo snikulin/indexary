@@ -1,5 +1,7 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+
+import { ru } from "./i18n/ru";
 
 export interface KnowledgeBaseChange {
   revision: number;
@@ -42,6 +44,7 @@ export async function applyKnowledgeBaseChange(
 
 export function LiveKnowledgeBaseChanges() {
   const queryClient = useQueryClient();
+  const [announcement, setAnnouncement] = useState("");
 
   useEffect(() => {
     const events = new EventSource("/api/events");
@@ -54,6 +57,13 @@ export function LiveKnowledgeBaseChanges() {
           Number.isSafeInteger(change.revision) &&
           changeTypes.has(change.type)
         ) {
+          setAnnouncement(
+            change.type === "catalog-changed"
+              ? ru.catalogUpdated
+              : change.type === "document-removed"
+                ? ru.documentRemoved
+                : ru.documentUpdated,
+          );
           void applyKnowledgeBaseChange(queryClient, change);
         }
       } catch {
@@ -71,5 +81,9 @@ export function LiveKnowledgeBaseChanges() {
     return () => events.close();
   }, [queryClient]);
 
-  return null;
+  return (
+    <p className="sr-only live-status" role="status" aria-live="polite">
+      {announcement}
+    </p>
+  );
 }

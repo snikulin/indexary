@@ -118,7 +118,9 @@ test("previews and switches referenced materials in the Document context", async
     page.getByRole("link", { name: "Открыть материал" }),
   ).toHaveAttribute("target", "_blank");
   await page.getByRole("button", { name: /нет-файла\.dat/ }).click();
-  await expect(page.getByRole("status")).toContainText("Материал не найден");
+  await expect(
+    page.getByRole("tabpanel", { name: "Вложения" }).getByRole("status"),
+  ).toContainText("Материал не найден");
   await expect(
     page.getByRole("heading", { name: "Путеводитель", level: 1 }),
   ).toBeVisible();
@@ -278,6 +280,7 @@ test("reflects live external Document create, update, rename, and delete", async
     await expect(
       page.getByRole("heading", { name: "Обновлено извне", level: 1 }),
     ).toBeVisible({ timeout: 2_000 });
+    await expect(page.locator(".live-status")).toHaveText("Документ обновлён.");
     await expect(page.getByRole("main")).toContainText("Вторая версия");
 
     await rename(createdPath, renamedPath);

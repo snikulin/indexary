@@ -7,6 +7,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { documentRoute, folderRoute } from "../src/api";
@@ -79,11 +80,12 @@ function renderAtlas(selection?: AtlasSelection) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={queryClient}>
       <Atlas selection={selection} />
     </QueryClientProvider>,
   );
+  return { ...rendered, queryClient };
 }
 
 function stubSuccessfulRequests() {
@@ -128,7 +130,14 @@ describe("Atlas", () => {
   });
 
   test("shows an explicit state instead of choosing another Document", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: async () => ({ code: "DOCUMENT_NOT_FOUND" }),
+      }),
+    );
     renderAtlas();
 
     expect(
@@ -177,6 +186,12 @@ describe("Atlas", () => {
       documentRoute("Раздел с пробелом/Проект Альфа.md"),
     );
     expect(screen.queryByText("Содержимое")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "Контекст Документа" }),
+      ).getByRole("status"),
+    ).toHaveTextContent("Контекст появится после выбора Документа.");
   });
 
   test("keeps encoded Cyrillic and spaced routes stable", () => {
@@ -267,7 +282,11 @@ describe("Atlas", () => {
       "/api/materials?document=index.md&id=source-material-1",
     );
     fireEvent.click(screen.getByRole("button", { name: /нет\.pdf/ }));
-    expect(screen.getByRole("status")).toHaveTextContent("Материал не найден");
+    expect(
+      screen.getByText("Материал не найден.", {
+        selector: ".material-diagnostic",
+      }),
+    ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("tab", { name: "Вложения" }));
     expect(
@@ -413,5 +432,126 @@ describe("Atlas", () => {
     expect(
       await screen.findByText("Поиск сейчас недоступен."),
     ).toBeInTheDocument();
+  });
+
+  test("distinguishes missing Documents from a server failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const missing = String(input).startsWith("/api/documents");
+        return {
+          ok: false,
+          status: missing ? 404 : 503,
+          json: async () => ({
+            code: missing ? "DOCUMENT_NOT_FOUND" : "SERVER_UNAVAILABLE",
+          }),
+        };
+      }),
+    );
+    renderAtlas({ kind: "document", path: "Нет.md" });
+
+    expect(
+      await screen.findByRole("heading", { name: "Документ недоступен" }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("navigation", { name: "База знаний" })).getByRole(
+        "status",
+      ),
+    ).toHaveTextContent("Сервер не смог загрузить каталог.");
+  });
+
+  test("supports arrow-key tab selection with complete tab semantics", async () => {
+    stubSuccessfulRequests();
+    renderAtlas();
+    const properties = await screen.findByRole("tab", { name: "Свойства" });
+
+    properties.focus();
+    fireEvent.keyDown(properties, { key: "Home" });
+    const sources = screen.getByRole("tab", { name: "Исходные материалы" });
+    expect(sources).toHaveFocus();
+    expect(sources).toHaveAttribute("aria-selected", "true");
+    const panel = screen.getByRole("tabpanel", {
+      name: "Исходные материалы",
+    });
+    expect(sources).toHaveAttribute("aria-controls", panel.id);
+
+    fireEvent.keyDown(sources, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Ссылки" })).toHaveFocus();
+    expect(
+      screen.getByRole("tabpanel", { name: "Ссылки" }),
+    ).toBeInTheDocument();
+  });
+
+  test("traps drawer focus, closes with Escape, and returns focus", async () => {
+    stubSuccessfulRequests();
+    renderAtlas();
+    const trigger = screen.getByRole("button", { name: "Открыть навигацию" });
+
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", {
+      name: "Навигация по Базе знаний",
+    });
+    expect(
+      within(dialog).getByRole("button", { name: "Закрыть" }),
+    ).toHaveFocus();
+    expect(document.querySelector(".application-content")).toHaveAttribute(
+      "inert",
+    );
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(
+      screen.queryByRole("dialog", { name: "Навигация по Базе знаний" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  test("focuses search, traps it, and returns to the invoking tag", async () => {
+    stubSuccessfulRequests();
+    renderAtlas();
+    const tag = await screen.findByRole("button", { name: "важное" });
+
+    tag.focus();
+    fireEvent.click(tag);
+    const dialog = screen.getByRole("dialog", { name: "Поиск Документов" });
+    expect(within(dialog).getByRole("combobox")).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(dialog).not.toBeInTheDocument();
+    expect(tag).toHaveFocus();
+  });
+
+  test("recovers a focused Document link after a live representation update", async () => {
+    const first = {
+      ...home,
+      revision: 1,
+      html: '<p><a href="/documents/Цель.md">Цель до обновления</a></p>',
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => ({
+        ok: true,
+        json: async () =>
+          String(input).startsWith("/api/catalog") ? rootCatalog : first,
+      })),
+    );
+    const { queryClient } = renderAtlas();
+    const link = await screen.findByRole("link", {
+      name: "Цель до обновления",
+    });
+    link.focus();
+
+    await act(async () => {
+      queryClient.setQueryData(["document", "index.md"], {
+        ...first,
+        revision: 2,
+        html: '<p><a href="/documents/Цель.md">Цель после обновления</a></p>',
+      });
+    });
+
+    expect(
+      await screen.findByRole("link", { name: "Цель после обновления" }),
+    ).toHaveFocus();
   });
 });

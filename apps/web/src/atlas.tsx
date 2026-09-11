@@ -12,7 +12,17 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 
 import {
   documentRoute,
@@ -20,6 +30,7 @@ import {
   fetchDocument,
   fetchSearch,
   folderRoute,
+  isMissingRequest,
   materialUrl,
   type DocumentRepresentation,
   type MaterialReference,
@@ -67,13 +78,95 @@ function lastDocument(): string | undefined {
   }
 }
 
+const focusableSelector = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "iframe",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+function useModalFocus(
+  containerRef: RefObject<HTMLElement | null>,
+  initialFocusRef: RefObject<HTMLElement | null>,
+  returnFocusRef: RefObject<HTMLElement | null>,
+  close: () => void,
+) {
+  useEffect(() => {
+    const container = containerRef.current;
+    const returnTarget = returnFocusRef.current;
+    if (container === null) {
+      return;
+    }
+
+    const focusInitial = () => {
+      const target =
+        initialFocusRef.current ??
+        container.querySelector<HTMLElement>(focusableSelector);
+      target?.focus();
+    };
+    focusInitial();
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const focusable = Array.from(
+        container.querySelectorAll<HTMLElement>(focusableSelector),
+      ).filter((element) => element.getAttribute("aria-hidden") !== "true");
+      if (focusable.length === 0) {
+        event.preventDefault();
+        container.focus();
+        return;
+      }
+
+      const first = focusable[0]!;
+      const last = focusable.at(-1)!;
+      if (
+        event.shiftKey &&
+        (document.activeElement === first ||
+          !container.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last ||
+          !container.contains(document.activeElement))
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (returnTarget?.isConnected) {
+        returnTarget.focus();
+      }
+    };
+  }, [close, containerRef, initialFocusRef, returnFocusRef]);
+}
+
 function Navigation({
   selection,
   close,
+  closeButtonRef,
   openSearch,
 }: {
   selection: AtlasSelection;
   close?: () => void;
+  closeButtonRef?: RefObject<HTMLButtonElement | null>;
   openSearch: () => void;
 }) {
   const folderPath =
@@ -94,24 +187,25 @@ function Navigation({
           <h2>{ru.knowledgeBase}</h2>
         </div>
         {close ? (
-          <Button className="icon-button" onClick={close} aria-label={ru.close}>
+          <Button
+            ref={closeButtonRef}
+            className="icon-button"
+            onClick={close}
+            aria-label={ru.close}
+          >
             <X aria-hidden="true" />
           </Button>
         ) : null}
       </div>
-      <label className="search-field">
+      <button
+        className="search-field"
+        type="button"
+        aria-keyshortcuts="Control+K Meta+K"
+        onClick={() => openSearch()}
+      >
         <Search aria-hidden="true" />
-        <span className="sr-only">{ru.searchPlaceholder}</span>
-        <input
-          type="search"
-          placeholder={ru.searchPlaceholder}
-          value=""
-          readOnly
-          aria-keyshortcuts="Control+K Meta+K"
-          onFocus={openSearch}
-          onClick={openSearch}
-        />
-      </label>
+        <span>{ru.searchPlaceholder}</span>
+      </button>
 
       <div className="tree-label">{ru.document}</div>
       <a
@@ -141,9 +235,20 @@ function Navigation({
       ) : null}
 
       {catalogQuery.isPending ? (
-        <p className="tree-status">{ru.loadingCatalog}</p>
+        <p className="tree-status" role="status">
+          {ru.loadingCatalog}
+        </p>
       ) : catalogQuery.isError ? (
-        <p className="tree-status">{ru.catalogUnavailable}</p>
+        <div className="tree-status" role="status">
+          <p>
+            {isMissingRequest(catalogQuery.error)
+              ? ru.catalogUnavailable
+              : ru.catalogServerError}
+          </p>
+          <Button onClick={() => void catalogQuery.refetch()}>
+            {ru.retry}
+          </Button>
+        </div>
       ) : (
         <>
           <ul className="tree-list" aria-label={ru.folders}>
@@ -204,10 +309,16 @@ function Navigation({
 function SearchDialog({
   initialTag,
   close,
+  returnFocusRef,
 }: {
   initialTag?: string;
   close: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultsId = useId();
+  const limitationsId = useId();
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState(initialTag);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -220,6 +331,8 @@ function SearchDialog({
     retry: false,
   });
   const results = searchQuery.data?.results ?? [];
+
+  useModalFocus(dialogRef, inputRef, returnFocusRef, close);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -250,17 +363,15 @@ function SearchDialog({
 
   return (
     <div className="search-layer">
-      <button
-        className="search-backdrop"
-        type="button"
-        aria-label={ru.closeSearch}
-        onClick={close}
-      />
+      <div className="search-backdrop" aria-hidden="true" onClick={close} />
       <section
+        ref={dialogRef}
         className="search-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="search-heading"
+        aria-describedby={limitationsId}
+        tabIndex={-1}
       >
         <div className="search-heading">
           <div>
@@ -275,10 +386,14 @@ function SearchDialog({
           <Search aria-hidden="true" />
           <span className="sr-only">{ru.searchPlaceholder}</span>
           <input
+            ref={inputRef}
             type="search"
             placeholder={ru.searchPlaceholder}
             value={query}
-            autoFocus
+            role="combobox"
+            aria-autocomplete="list"
+            aria-controls={resultsId}
+            aria-expanded={hasCriteria && results.length > 0}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleKeyDown}
           />
@@ -297,11 +412,15 @@ function SearchDialog({
           </div>
         )}
 
-        <div className="search-results" aria-live="polite">
+        <div id={resultsId} className="search-results" aria-live="polite">
           {!hasCriteria ? (
-            <p className="search-state">{ru.searchPrompt}</p>
+            <p className="search-state" role="status">
+              {ru.searchPrompt}
+            </p>
           ) : searchQuery.isPending ? (
-            <p className="search-state">{ru.searchLoading}</p>
+            <p className="search-state" role="status">
+              {ru.searchLoading}
+            </p>
           ) : searchQuery.isError ? (
             <div className="search-state" role="status">
               <p>{ru.searchFailed}</p>
@@ -310,10 +429,14 @@ function SearchDialog({
               </Button>
             </div>
           ) : results.length === 0 ? (
-            <p className="search-state">{ru.searchEmpty}</p>
+            <p className="search-state" role="status">
+              {ru.searchEmpty}
+            </p>
           ) : (
             <>
-              <p className="search-count">{ru.searchCount(results.length)}</p>
+              <p className="search-count" role="status">
+                {ru.searchCount(results.length)}
+              </p>
               <ul className="search-result-list">
                 {results.map((result, index) => (
                   <li key={result.path}>
@@ -353,7 +476,9 @@ function SearchDialog({
             </>
           )}
         </div>
-        <p className="search-limitations">{ru.searchLimitations}</p>
+        <p id={limitationsId} className="search-limitations">
+          {ru.searchLimitations}
+        </p>
       </section>
     </div>
   );
@@ -362,10 +487,14 @@ function SearchDialog({
 function Context({
   selection,
   close,
+  closeButtonRef,
 }: {
   selection: AtlasSelection;
   close?: () => void;
+  closeButtonRef?: RefObject<HTMLButtonElement | null>;
 }) {
+  const tabsId = useId();
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const documentPath =
     selection.kind === "document" ? selection.path : undefined;
   const documentQuery = useQuery({
@@ -374,7 +503,9 @@ function Context({
     enabled: documentPath !== undefined,
     retry: false,
   });
-  const [activeSection, setActiveSection] = useState<string>(ru.properties);
+  const [activeSection, setActiveSection] = useState<
+    (typeof contextSections)[number]
+  >(ru.properties);
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>();
 
   useEffect(() => {
@@ -395,6 +526,39 @@ function Context({
   const selectedMaterial =
     materials.find((material) => material.id === selectedMaterialId) ??
     materials[0];
+  const activeIndex = contextSections.indexOf(activeSection);
+  const activeTabId = `${tabsId}-tab-${activeIndex}`;
+  const activePanelId = `${tabsId}-panel-${activeIndex}`;
+
+  function selectTab(index: number) {
+    const section = contextSections[index];
+    if (section === undefined) {
+      return;
+    }
+    setActiveSection(section);
+    setSelectedMaterialId(undefined);
+    tabRefs.current[index]?.focus();
+  }
+
+  function handleTabKeyDown(
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) {
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowRight") {
+      nextIndex = (index + 1) % contextSections.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (index - 1 + contextSections.length) % contextSections.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = contextSections.length - 1;
+    }
+    if (nextIndex !== undefined) {
+      event.preventDefault();
+      selectTab(nextIndex);
+    }
+  }
 
   return (
     <aside className="context-panel" aria-label={ru.context}>
@@ -404,33 +568,69 @@ function Context({
           <h2>{ru.context}</h2>
         </div>
         {close ? (
-          <Button className="icon-button" onClick={close} aria-label={ru.close}>
+          <Button
+            ref={closeButtonRef}
+            className="icon-button"
+            onClick={close}
+            aria-label={ru.close}
+          >
             <X aria-hidden="true" />
           </Button>
         ) : null}
       </div>
-      <div
-        className="context-tabs"
-        role="tablist"
-        aria-label={ru.contextSections}
-      >
-        {contextSections.map((section) => (
-          <button
-            key={section}
-            className={section === activeSection ? "selected" : ""}
-            type="button"
-            role="tab"
-            aria-selected={section === activeSection}
-            onClick={() => {
-              setActiveSection(section);
-              setSelectedMaterialId(undefined);
-            }}
-          >
-            {section}
-          </button>
-        ))}
-      </div>
-      {documentQuery.data ? (
+      {selection.kind === "document" ? (
+        <div
+          className="context-tabs"
+          role="tablist"
+          aria-label={ru.contextSections}
+        >
+          {contextSections.map((section, index) => (
+            <button
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
+              key={section}
+              id={`${tabsId}-tab-${index}`}
+              className={section === activeSection ? "selected" : ""}
+              type="button"
+              role="tab"
+              aria-selected={section === activeSection}
+              aria-controls={`${tabsId}-panel-${index}`}
+              tabIndex={section === activeSection ? 0 : -1}
+              onClick={() => {
+                setActiveSection(section);
+                setSelectedMaterialId(undefined);
+              }}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
+            >
+              {section}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {selection.kind === "folder" ? (
+        <div className="empty-context" role="status">
+          <FileText aria-hidden="true" />
+          <p>{ru.contextForFolder}</p>
+        </div>
+      ) : documentQuery.isPending ? (
+        <div className="empty-context" role="status">
+          <FileText aria-hidden="true" />
+          <p>{ru.loadingContext}</p>
+        </div>
+      ) : documentQuery.isError ? (
+        <div className="empty-context" role="status">
+          <AlertTriangle aria-hidden="true" />
+          <p>
+            {isMissingRequest(documentQuery.error)
+              ? ru.contextUnavailable
+              : ru.contextServerError}
+          </p>
+          <Button onClick={() => void documentQuery.refetch()}>
+            {ru.retry}
+          </Button>
+        </div>
+      ) : documentQuery.data ? (
         materialKind !== undefined ? (
           <MaterialPanel
             documentPath={documentQuery.data.path}
@@ -439,11 +639,15 @@ function Context({
             materials={materials}
             selected={selectedMaterial}
             select={setSelectedMaterialId}
+            panelId={activePanelId}
+            labelledBy={activeTabId}
           />
         ) : (
           <ContextSection
             document={documentQuery.data}
             section={activeSection}
+            panelId={activePanelId}
+            labelledBy={activeTabId}
           />
         )
       ) : (
@@ -476,6 +680,8 @@ function MaterialPanel({
   materials,
   selected,
   select,
+  panelId,
+  labelledBy,
 }: {
   documentPath: string;
   revision: number;
@@ -483,9 +689,17 @@ function MaterialPanel({
   materials: MaterialReference[];
   selected: MaterialReference | undefined;
   select: (id: string) => void;
+  panelId: string;
+  labelledBy: string;
 }) {
   return (
-    <section className="materials" role="tabpanel" aria-label={heading}>
+    <section
+      id={panelId}
+      className="materials"
+      role="tabpanel"
+      aria-labelledby={labelledBy}
+      tabIndex={0}
+    >
       <h3>{heading}</h3>
       {materials.length === 0 ? (
         <p className="empty-materials">{ru.noMaterials}</p>
@@ -504,7 +718,9 @@ function MaterialPanel({
                   <small>
                     {material.status === "available"
                       ? material.mimeType
-                      : ru.materialUnavailable}
+                      : material.status === "missing"
+                        ? ru.materialMissing
+                        : ru.materialInvalid}
                   </small>
                 </button>
               </li>
@@ -525,7 +741,9 @@ function MaterialPanel({
               </dl>
               {selected.diagnostic ? (
                 <p className="material-diagnostic" role="status">
-                  {selected.diagnostic.message}
+                  {selected.status === "missing"
+                    ? ru.materialMissing
+                    : ru.materialInvalid}
                 </p>
               ) : selected.preview === "image" ? (
                 <img
@@ -563,16 +781,22 @@ function MaterialPanel({
 function ContextSection({
   document,
   section,
+  panelId,
+  labelledBy,
 }: {
   document: DocumentRepresentation;
   section: string;
+  panelId: string;
+  labelledBy: string;
 }) {
   if (section === ru.outgoingLinks) {
     return (
       <section
+        id={panelId}
         className="relationships"
         role="tabpanel"
-        aria-labelledby="links-heading"
+        aria-labelledby={labelledBy}
+        tabIndex={0}
       >
         <h3 id="links-heading">{ru.outgoingLinks}</h3>
         {document.outgoingLinks.length === 0 ? (
@@ -600,9 +824,11 @@ function ContextSection({
   if (section === ru.backlinks) {
     return (
       <section
+        id={panelId}
         className="relationships"
         role="tabpanel"
-        aria-labelledby="backlinks-heading"
+        aria-labelledby={labelledBy}
+        tabIndex={0}
       >
         <h3 id="backlinks-heading">{ru.backlinks}</h3>
         {document.backlinks.length === 0 ? (
@@ -623,9 +849,11 @@ function ContextSection({
 
   return (
     <section
+      id={panelId}
       className="properties"
       role="tabpanel"
-      aria-labelledby="properties-heading"
+      aria-labelledby={labelledBy}
+      tabIndex={0}
     >
       <h3 id="properties-heading">{ru.properties}</h3>
       {document.properties.length > 0 ? (
@@ -652,11 +880,64 @@ function DocumentView({
   openSearch: (tag: string) => void;
 }) {
   const documentPath = selection.path;
+  const viewRef = useRef<HTMLElement>(null);
+  const focusedControl = useRef<
+    { kind: "link" | "button"; value: string } | undefined
+  >(undefined);
   const documentQuery = useQuery({
     queryKey: ["document", documentPath],
     queryFn: () => fetchDocument(documentPath),
     retry: false,
   });
+
+  useLayoutEffect(() => {
+    const container = viewRef.current;
+    const identity = focusedControl.current;
+    if (
+      container === null ||
+      identity === undefined ||
+      container.contains(document.activeElement) ||
+      document.activeElement !== document.body
+    ) {
+      return;
+    }
+
+    const selector = identity.kind === "link" ? "a[href]" : "button";
+    const replacement = Array.from(
+      container.querySelectorAll<HTMLElement>(selector),
+    ).find((element) =>
+      identity.kind === "link"
+        ? element.getAttribute("href") === identity.value
+        : element.textContent?.trim() === identity.value,
+    );
+    (replacement ?? container).focus();
+  }, [documentQuery.data?.revision, documentQuery.isError]);
+
+  function rememberFocusedControl(event: FocusEvent<HTMLElement>) {
+    const target = event.target;
+    if (target instanceof HTMLAnchorElement) {
+      focusedControl.current = {
+        kind: "link",
+        value: target.getAttribute("href") ?? "",
+      };
+    } else if (target instanceof HTMLButtonElement) {
+      focusedControl.current = {
+        kind: "button",
+        value: target.textContent?.trim() ?? "",
+      };
+    } else {
+      focusedControl.current = undefined;
+    }
+  }
+
+  function forgetFocusedControl(event: FocusEvent<HTMLElement>) {
+    if (
+      event.relatedTarget instanceof Node &&
+      !event.currentTarget.contains(event.relatedTarget)
+    ) {
+      focusedControl.current = undefined;
+    }
+  }
 
   useEffect(() => {
     if (documentQuery.data && documentQuery.data.path !== "index.md") {
@@ -669,18 +950,36 @@ function DocumentView({
   }, [documentQuery.data]);
 
   if (documentQuery.isPending) {
-    return <div className="document-state">{ru.loading}</div>;
+    return (
+      <div className="document-state" role="status">
+        {ru.loading}
+      </div>
+    );
   }
 
   if (documentQuery.isError) {
+    const missing = isMissingRequest(documentQuery.error);
     return (
-      <div className="document-state error-state" role="status">
+      <div
+        ref={viewRef as RefObject<HTMLDivElement | null>}
+        className="document-state error-state"
+        role="status"
+        tabIndex={-1}
+      >
         <FileText aria-hidden="true" />
         <h1>
-          {selection.root ? ru.unavailableTitle : ru.documentUnavailableTitle}
+          {missing
+            ? selection.root
+              ? ru.unavailableTitle
+              : ru.documentUnavailableTitle
+            : ru.serverUnavailableTitle}
         </h1>
         <p>
-          {selection.root ? ru.unavailableBody : ru.documentUnavailableBody}
+          {missing
+            ? selection.root
+              ? ru.unavailableBody
+              : ru.documentUnavailableBody
+            : ru.serverUnavailableBody}
         </p>
         <Button onClick={() => void documentQuery.refetch()}>{ru.retry}</Button>
       </div>
@@ -688,7 +987,13 @@ function DocumentView({
   }
 
   return (
-    <article className="document">
+    <article
+      ref={viewRef as RefObject<HTMLElement | null>}
+      className="document"
+      tabIndex={-1}
+      onFocusCapture={rememberFocusedControl}
+      onBlurCapture={forgetFocusedControl}
+    >
       <div className="document-kicker">/{documentQuery.data.path}</div>
       <h1>{documentQuery.data.title}</h1>
       {documentQuery.data.tags.length > 0 ? (
@@ -703,7 +1008,12 @@ function DocumentView({
         </ul>
       ) : null}
       {documentQuery.data.diagnostics.length > 0 ? (
-        <section className="document-diagnostics" aria-label={ru.diagnostics}>
+        <section
+          className="document-diagnostics"
+          aria-label={ru.diagnostics}
+          role="status"
+        >
+          <strong>{ru.degradedDocument}</strong>
           {documentQuery.data.diagnostics.map((diagnostic) => (
             <p key={diagnostic.code}>{diagnostic.message}</p>
           ))}
@@ -725,14 +1035,22 @@ function FolderView({ folderPath }: { folderPath: string }) {
   });
 
   if (catalogQuery.isPending) {
-    return <div className="document-state">{ru.loadingCatalog}</div>;
+    return (
+      <div className="document-state" role="status">
+        {ru.loadingCatalog}
+      </div>
+    );
   }
   if (catalogQuery.isError) {
+    const missing = isMissingRequest(catalogQuery.error);
     return (
       <div className="document-state error-state" role="status">
         <FolderClosed aria-hidden="true" />
-        <h1>{ru.folderUnavailableTitle}</h1>
-        <p>{ru.folderUnavailableBody}</p>
+        <h1>
+          {missing ? ru.folderUnavailableTitle : ru.serverUnavailableTitle}
+        </h1>
+        <p>{missing ? ru.folderUnavailableBody : ru.serverUnavailableBody}</p>
+        <Button onClick={() => void catalogQuery.refetch()}>{ru.retry}</Button>
       </div>
     );
   }
@@ -777,6 +1095,56 @@ function FolderView({ folderPath }: { folderPath: string }) {
   );
 }
 
+function AtlasDrawer({
+  kind,
+  selection,
+  close,
+  openSearch,
+  returnFocusRef,
+}: {
+  kind: "navigation" | "context";
+  selection: AtlasSelection;
+  close: () => void;
+  openSearch: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
+}) {
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useModalFocus(drawerRef, closeButtonRef, returnFocusRef, close);
+
+  return (
+    <div className="drawer-layer">
+      <div className="drawer-backdrop" aria-hidden="true" onClick={close} />
+      <div
+        ref={drawerRef}
+        id={`${kind}-drawer`}
+        className={`drawer drawer-${kind}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={
+          kind === "navigation" ? ru.navigationDialog : ru.contextDialog
+        }
+        tabIndex={-1}
+      >
+        {kind === "navigation" ? (
+          <Navigation
+            selection={selection}
+            close={close}
+            closeButtonRef={closeButtonRef}
+            openSearch={openSearch}
+          />
+        ) : (
+          <Context
+            selection={selection}
+            close={close}
+            closeButtonRef={closeButtonRef}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Atlas({
   selection = { kind: "document", path: "index.md", root: true },
 }: {
@@ -790,11 +1158,30 @@ export function Atlas({
     open: boolean;
     tag?: string;
   }>({ open: false });
-  const closeDrawers = () => setDrawers({ navigation: false, context: false });
-  const openSearch = (tag?: string) => {
-    closeDrawers();
-    setSearch(tag === undefined ? { open: true } : { open: true, tag });
-  };
+  const navigationButtonRef = useRef<HTMLButtonElement>(null);
+  const contextButtonRef = useRef<HTMLButtonElement>(null);
+  const searchReturnFocusRef = useRef<HTMLElement>(null);
+  const closeDrawers = useCallback(
+    () => setDrawers({ navigation: false, context: false }),
+    [],
+  );
+  const closeSearch = useCallback(() => setSearch({ open: false }), []);
+  const openSearch = useCallback(
+    (tag?: string) => {
+      const activeElement = document.activeElement;
+      searchReturnFocusRef.current =
+        drawers.navigation && navigationButtonRef.current
+          ? navigationButtonRef.current
+          : drawers.context && contextButtonRef.current
+            ? contextButtonRef.current
+            : activeElement instanceof HTMLElement
+              ? activeElement
+              : null;
+      closeDrawers();
+      setSearch(tag === undefined ? { open: true } : { open: true, tag });
+    },
+    [closeDrawers, drawers.context, drawers.navigation],
+  );
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
@@ -805,76 +1192,86 @@ export function Atlas({
     };
     document.addEventListener("keydown", handleShortcut);
     return () => document.removeEventListener("keydown", handleShortcut);
-  }, []);
+  }, [openSearch]);
+
+  const drawerOpen = drawers.navigation || drawers.context;
+  const backgroundHidden = drawerOpen || search.open;
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <Button
-          className="icon-button mobile-only"
-          aria-label={ru.openNavigation}
-          onClick={() => setDrawers({ navigation: true, context: false })}
-        >
-          <Menu aria-hidden="true" />
-        </Button>
-        <a className="brand" href="/">
-          <span className="brand-mark">{ru.productMark}</span>
-          <span>
-            <strong>{ru.productName}</strong>
-            <small>{ru.atlas}</small>
-          </span>
+      <div
+        className="application-content"
+        aria-hidden={backgroundHidden ? "true" : undefined}
+        inert={backgroundHidden ? true : undefined}
+      >
+        <a className="skip-link" href="#document-content">
+          {ru.skipToDocument}
         </a>
-        <div className="topbar-spacer" />
-        <Button
-          className="icon-button mobile-only"
-          aria-label={ru.openContext}
-          onClick={() => setDrawers({ navigation: false, context: true })}
-        >
-          <PanelRightOpen aria-hidden="true" />
-        </Button>
-      </header>
+        <header className="topbar">
+          <Button
+            ref={navigationButtonRef}
+            className="icon-button mobile-only"
+            aria-label={ru.openNavigation}
+            aria-controls="navigation-drawer"
+            aria-expanded={drawers.navigation}
+            onClick={() => setDrawers({ navigation: true, context: false })}
+          >
+            <Menu aria-hidden="true" />
+          </Button>
+          <a className="brand" href="/">
+            <span className="brand-mark">{ru.productMark}</span>
+            <span>
+              <strong>{ru.productName}</strong>
+              <small>{ru.atlas}</small>
+            </span>
+          </a>
+          <div className="topbar-spacer" />
+          <Button
+            ref={contextButtonRef}
+            className="icon-button mobile-only"
+            aria-label={ru.openContext}
+            aria-controls="context-drawer"
+            aria-expanded={drawers.context}
+            onClick={() => setDrawers({ navigation: false, context: true })}
+          >
+            <PanelRightOpen aria-hidden="true" />
+          </Button>
+        </header>
 
-      <div className="atlas-grid">
-        <div className="desktop-panel">
-          <Navigation selection={selection} openSearch={openSearch} />
-        </div>
-        <main className="document-column">
-          {selection.kind === "folder" ? (
-            <FolderView folderPath={selection.path} />
-          ) : (
-            <DocumentView selection={selection} openSearch={openSearch} />
-          )}
-        </main>
-        <div className="desktop-panel">
-          <Context selection={selection} />
+        <div className="atlas-grid">
+          <div className="desktop-panel">
+            <Navigation selection={selection} openSearch={openSearch} />
+          </div>
+          <main id="document-content" className="document-column" tabIndex={-1}>
+            {selection.kind === "folder" ? (
+              <FolderView folderPath={selection.path} />
+            ) : (
+              <DocumentView selection={selection} openSearch={openSearch} />
+            )}
+          </main>
+          <div className="desktop-panel">
+            <Context selection={selection} />
+          </div>
         </div>
       </div>
 
-      {drawers.navigation || drawers.context ? (
-        <div className="drawer-layer">
-          <button
-            className="drawer-backdrop"
-            aria-label={ru.close}
-            onClick={closeDrawers}
-          />
-          <div className="drawer">
-            {drawers.navigation ? (
-              <Navigation
-                selection={selection}
-                close={closeDrawers}
-                openSearch={openSearch}
-              />
-            ) : (
-              <Context selection={selection} close={closeDrawers} />
-            )}
-          </div>
-        </div>
+      {drawerOpen ? (
+        <AtlasDrawer
+          kind={drawers.navigation ? "navigation" : "context"}
+          selection={selection}
+          close={closeDrawers}
+          openSearch={openSearch}
+          returnFocusRef={
+            drawers.navigation ? navigationButtonRef : contextButtonRef
+          }
+        />
       ) : null}
 
       {search.open ? (
         <SearchDialog
           initialTag={search.tag}
-          close={() => setSearch({ open: false })}
+          close={closeSearch}
+          returnFocusRef={searchReturnFocusRef}
         />
       ) : null}
     </div>

@@ -6,6 +6,10 @@ Linux on x86-64 is the supported development environment and eventual deployment
 
 The browser smoke test uses the host Chromium executable at `/usr/bin/chromium`; set `CHROMIUM_PATH` to another Chromium-compatible executable when the supported Linux installation places it elsewhere. Browser binaries are a documented host prerequisite rather than an implicit dependency lifecycle download.
 
+The same Playwright journey is run explicitly in current Firefox before a
+daily-use release. See [the accessibility checks](accessibility.md) for browser
+commands and the focused manual keyboard checklist. WebKit remains best effort.
+
 The development environment pins Node.js, the JavaScript package manager, and project tools. JavaScript dependencies are fully locked. A small number of host prerequisites may be documented rather than isolated.
 
 `mise` manages tool versions, project environment variables, and the public task interface. Both `mise.toml` and `mise.lock` are committed, and locked installation is used whenever the toolchain is verified. Routine environment activation does not install host packages or configure host services.
