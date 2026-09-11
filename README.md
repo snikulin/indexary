@@ -94,6 +94,13 @@ Authentication and public internet deployment are outside the initial scope.
 
 Possible later capabilities include semantic search, additional filesystem-based formats, multiple knowledge sources, configurable metadata views, and agent-oriented integration points. These should remain optional layers over user-owned data.
 
+## Project documentation
+
+- [Domain language](CONTEXT.md)
+- [Development process](docs/development.md)
+- [Initial operating model](docs/operations.md)
+- [Architecture decisions](docs/adr/)
+
 ## License
 
 Indexary is licensed under the [GNU General Public License v3.0](LICENSE).
