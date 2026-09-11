@@ -218,7 +218,11 @@ describe("assembled Fastify application", () => {
     const knowledgeBase: KnowledgeBase = {
       async initialize() {
         await initializationGate;
-        status = { state: "ready", degradedCount: 0 };
+        status = {
+          state: "ready",
+          degradedCount: 0,
+          homeDocument: "available",
+        };
       },
       async close() {
         closeCalls += 1;
@@ -264,7 +268,7 @@ describe("assembled Fastify application", () => {
     await expect(stream.closed).resolves.toBeUndefined();
   });
 
-  test("keeps liveness up and reports a clear non-fatal missing Home Document", async () => {
+  test("keeps readiness up and reports a clear non-fatal missing Home Document", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "indexary-no-index-"));
     temporaryDirectories.push(root);
     await writeFile(path.join(root, "somewhere.md"), "# Не домашний\n");
@@ -283,10 +287,11 @@ describe("assembled Fastify application", () => {
 
     expect((await app.inject("/api/health/live")).statusCode).toBe(200);
     const ready = await app.inject("/api/health/ready");
-    expect(ready.statusCode).toBe(503);
+    expect(ready.statusCode).toBe(200);
     expect(ready.json()).toEqual({
-      status: "not-ready",
-      reason: "home-document-unavailable",
+      status: "ready",
+      homeDocument: "unavailable",
+      degradedCount: 0,
     });
     await app.close();
   });

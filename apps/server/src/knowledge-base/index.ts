@@ -35,7 +35,11 @@ const SNIPPET_END = "\u{E001}";
 
 export type KnowledgeBaseStatus =
   | { state: "initializing" }
-  | { state: "ready"; degradedCount: number }
+  | {
+      state: "ready";
+      degradedCount: number;
+      homeDocument: "available" | "unavailable";
+    }
   | { state: "home-document-unavailable" };
 
 export type CatalogDiagnosticCode =
@@ -271,6 +275,15 @@ export function verifyFts5Support(database: Pick<DatabaseSync, "exec">): void {
       "The pinned Node 24 runtime does not provide the required SQLite FTS5 capability.",
       { cause: error },
     );
+  }
+}
+
+export function preflightKnowledgeBaseRuntime(): void {
+  const database = new DatabaseSync(":memory:");
+  try {
+    verifyFts5Support(database);
+  } finally {
+    database.close();
   }
 }
 
@@ -1457,13 +1470,11 @@ export function createKnowledgeBase(
     const home = activeDatabase
       .prepare("SELECT path FROM documents WHERE path = ?")
       .get(HOME_DOCUMENT_PATH);
-    currentStatus =
-      home === undefined
-        ? { state: "home-document-unavailable" }
-        : {
-            state: "ready",
-            degradedCount: catalogDegradedCount(activeDatabase),
-          };
+    currentStatus = {
+      state: "ready",
+      degradedCount: catalogDegradedCount(activeDatabase),
+      homeDocument: home === undefined ? "unavailable" : "available",
+    };
   }
 
   async function reconcile(updateReadiness = true): Promise<void> {

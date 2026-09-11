@@ -631,19 +631,24 @@ export async function verifyManagedService(
   }
 
   const base = `http://${SERVICE_HOST}:${port}`;
-  await eventually(async () => {
+  const readiness = await eventually(async () => {
     const live = await readJsonResponse(`${base}/api/health/live`);
     if (JSON.stringify(live) !== JSON.stringify({ status: "live" })) {
       throw new ProductionError(
         "The managed service liveness response is invalid.",
       );
     }
-    const ready = await readJsonResponse(`${base}/api/health/ready`);
+    const readyResponse = await fetchWithin(`${base}/api/health/ready`);
+    const ready = await readyResponse.json().catch(() => undefined);
+    let state;
     if (
-      ready?.status !== "ready" ||
-      ready?.homeDocument !== "available" ||
-      !Number.isSafeInteger(ready?.degradedCount)
+      readyResponse.status === 200 &&
+      ready?.status === "ready" &&
+      ["available", "unavailable"].includes(ready?.homeDocument) &&
+      Number.isSafeInteger(ready?.degradedCount)
     ) {
+      state = "ready";
+    } else {
       throw new ProductionError(
         "The managed service readiness response is invalid.",
       );
@@ -657,12 +662,13 @@ export async function verifyManagedService(
         "The managed same-origin frontend is unavailable.",
       );
     }
+    return state;
   });
   await readInvocationEvents(properties.InvocationID, commandRunner, [
     "starting",
     "runtime-preflight-passed",
     "listening",
-    "ready",
+    ...(readiness === "ready" ? ["ready"] : []),
   ]);
 
   const journal = await commandRunner("journalctl", [
@@ -677,7 +683,7 @@ export async function verifyManagedService(
       "The managed service journal exposed private configuration.",
     );
   }
-  return { invocationId: properties.InvocationID, mainPid };
+  return { invocationId: properties.InvocationID, mainPid, readiness };
 }
 
 export async function verifyStoppedInvocation(
@@ -718,6 +724,18 @@ export async function installService(
     );
   }
   const manifest = await validateRelease(release);
+  const installationFile = path.join(paths.stateRoot, "installation.json");
+  const existingInstallation = await lstat(installationFile).catch((error) => {
+    if (error?.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  });
+  if (existingInstallation !== undefined) {
+    throw new ProductionError(
+      "The initial service installation is already complete; use the safe deployment workflow for later releases.",
+    );
+  }
   const before = await fingerprintTree(root);
   let operationError;
 
@@ -787,7 +805,7 @@ export async function installService(
     }
     await stoppedVerifier(first.invocationId);
     await writeAtomic(
-      path.join(paths.stateRoot, "installation.json"),
+      installationFile,
       `${JSON.stringify(
         {
           schemaVersion: 1,
@@ -1243,26 +1261,36 @@ function releaseEnvironment({ knowledgeBasePath, cacheRoot, webRoot, port }) {
 
 async function verifyLocalApplication(port, requireReady) {
   const base = `http://${SERVICE_HOST}:${port}`;
-  await eventually(async () => {
+  return eventually(async () => {
     const live = await readJsonResponse(`${base}/api/health/live`);
     if (JSON.stringify(live) !== JSON.stringify({ status: "live" })) {
       throw new ProductionError("The release liveness response is invalid.");
     }
     const readyResponse = await fetchWithin(`${base}/api/health/ready`);
-    if (requireReady) {
-      if (readyResponse.status !== 200) {
-        throw new ProductionError("The release did not become ready.");
-      }
-      const ready = await readyResponse.json().catch(() => undefined);
+    const ready = await readyResponse.json().catch(() => undefined);
+    let readiness;
+    if (readyResponse.status === 200) {
       if (
         ready?.status !== "ready" ||
-        ready?.homeDocument !== "available" ||
+        !["available", "unavailable"].includes(ready?.homeDocument) ||
         !Number.isSafeInteger(ready?.degradedCount)
       ) {
         throw new ProductionError("The release readiness response is invalid.");
       }
-    } else if (![200, 503].includes(readyResponse.status)) {
-      throw new ProductionError("The release readiness endpoint is invalid.");
+      readiness = "ready";
+    } else if (
+      !requireReady &&
+      readyResponse.status === 503 &&
+      ready?.status === "not-ready" &&
+      ready?.reason === "home-document-unavailable"
+    ) {
+      readiness = "home-document-unavailable";
+    } else {
+      throw new ProductionError(
+        requireReady
+          ? "The release did not become ready."
+          : "The release did not reach a stable Home Document state.",
+      );
     }
     const root = await fetchWithin(`${base}/`);
     if (
@@ -1273,6 +1301,7 @@ async function verifyLocalApplication(port, requireReady) {
         "The release same-origin frontend is unavailable.",
       );
     }
+    return readiness;
   });
 }
 
@@ -1366,9 +1395,10 @@ async function smokeDirectRelease({
     });
   }
   let verificationError;
+  let readiness;
   try {
-    await verifyLocalApplication(port, requireReady);
-    if (requireReady) {
+    readiness = await verifyLocalApplication(port, requireReady);
+    if (readiness === "ready") {
       await eventually(async () => {
         if (!output.includes('"event":"ready"')) {
           throw new ProductionError(
@@ -1390,7 +1420,7 @@ async function smokeDirectRelease({
   if (exit.code !== 0 || exit.signal !== null) {
     throw new ProductionError("The release process ended unexpectedly.");
   }
-  parsePrivateLifecycleLog(output, privateValues, requireReady);
+  parsePrivateLifecycleLog(output, privateValues, readiness === "ready");
 }
 
 async function transientServiceState(unitName, commandRunner) {
@@ -1455,7 +1485,7 @@ async function smokeManagedRelease({
   let first;
   let second;
   try {
-    await verifyLocalApplication(port, requireReady);
+    const firstReadiness = await verifyLocalApplication(port, requireReady);
     first = await transientServiceState(unitName, commandRunner);
     const executable = await realpath(`/proc/${first.mainPid}/exe`).catch(
       () => undefined,
@@ -1466,7 +1496,7 @@ async function smokeManagedRelease({
       );
     }
     await commandRunner("systemctl", ["--user", "restart", unitName]);
-    await verifyLocalApplication(port, requireReady);
+    const secondReadiness = await verifyLocalApplication(port, requireReady);
     second = await eventually(async () => {
       const state = await transientServiceState(unitName, commandRunner);
       if (
@@ -1486,6 +1516,7 @@ async function smokeManagedRelease({
         "starting",
         "runtime-preflight-passed",
         "listening",
+        ...(firstReadiness === "ready" ? ["ready"] : []),
         "stopping",
         "stopped",
       ],
@@ -1500,7 +1531,7 @@ async function smokeManagedRelease({
         "starting",
         "runtime-preflight-passed",
         "listening",
-        ...(requireReady ? ["ready"] : []),
+        ...(secondReadiness === "ready" ? ["ready"] : []),
         "stopping",
         "stopped",
       ],

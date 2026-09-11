@@ -42,8 +42,9 @@ The stable project interface is:
 - `mise run smoke:release -- <release-directory>`: exercise the bundled runtime
   both directly outside the checkout and under an isolated transient systemd
   user service;
-- `mise run install:service -- <release> <absolute-kb> [port]`: install, enable,
-  start, restart, and verify the persistent user service;
+- `mise run install:service -- <release> <absolute-kb> [port]`: perform the
+  initial install, enable, start, restart, and verify the persistent user
+  service; later releases must use the safe deployment workflow;
 - `mise run verify:service`: verify the active release, service state, local
   application behavior, structured journal, and read-only boundary again.
 
@@ -98,8 +99,9 @@ Compatible indexes are opened and reconciled against a metadata fingerprint of
 the current filesystem before the instance becomes ready. An unchanged warm
 index is reused without reparsing Documents; changed, invalid, and corrupt
 indexes are built as separate candidates, validated, and atomically selected. A
-first build remains live but not ready, and readiness reports only an aggregate
-degraded count.
+first build remains live but not ready. Once a usable index exists, readiness
+reports an aggregate degraded count and whether the Home Document is available;
+a missing Home Document does not make the rest of the Knowledge Base unready.
 
 `mise run perf:index` generates a non-personal workload of 10,000 Documents and
 10,000,000,000 bytes of sparse Source Material, then checks the 30-second cold

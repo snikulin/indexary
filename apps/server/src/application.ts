@@ -21,7 +21,10 @@ const LiveResponse = Type.Object(
 const ReadyResponse = Type.Object(
   {
     status: Type.Literal("ready"),
-    homeDocument: Type.Literal("available"),
+    homeDocument: Type.Union([
+      Type.Literal("available"),
+      Type.Literal("unavailable"),
+    ]),
     degradedCount: Type.Integer({ minimum: 0 }),
   },
   { additionalProperties: false },
@@ -553,7 +556,7 @@ export async function buildApplication(
       if (status.state === "ready") {
         return {
           status: "ready" as const,
-          homeDocument: "available" as const,
+          homeDocument: status.homeDocument,
           degradedCount: status.degradedCount,
         };
       }

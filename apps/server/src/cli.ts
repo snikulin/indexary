@@ -1,5 +1,4 @@
 import process from "node:process";
-import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delayFor } from "node:timers/promises";
 
 import type { FastifyInstance } from "fastify";
@@ -8,7 +7,7 @@ import { buildApplication } from "./application.js";
 import { ConfigurationError, resolveRuntimeConfig } from "./config.js";
 import {
   KnowledgeBaseStartupError,
-  verifyFts5Support,
+  preflightKnowledgeBaseRuntime,
 } from "./knowledge-base/index.js";
 
 type OperationalEvent =
@@ -34,15 +33,6 @@ function emitOperationalEvent(
     console.error(line);
   } else {
     console.log(line);
-  }
-}
-
-function preflightFts5(): void {
-  const database = new DatabaseSync(":memory:");
-  try {
-    verifyFts5Support(database);
-  } finally {
-    database.close();
   }
 }
 
@@ -74,7 +64,7 @@ async function main(): Promise<void> {
       process.env.INIT_CWD ?? process.cwd(),
     );
     emitOperationalEvent("starting");
-    preflightFts5();
+    preflightKnowledgeBaseRuntime();
     emitOperationalEvent("runtime-preflight-passed");
 
     app = await buildApplication(config);

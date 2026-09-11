@@ -327,6 +327,23 @@ test("installation configures, starts, restarts, and verifies without changing t
   );
   assert.equal(installation.releaseId, path.basename(release));
   assert.equal(Object.values(installation).includes(knowledgeBase), false);
+
+  await assert.rejects(
+    () =>
+      installService(
+        {
+          paths,
+          releaseDirectory: release,
+          knowledgeBasePath: knowledgeBase,
+        },
+        {
+          runCommand: async () => {
+            throw new Error("No host command should run twice.");
+          },
+        },
+      ),
+    /initial service installation is already complete/,
+  );
 });
 
 test("release validator checks the complete immutable payload", async (context) => {

@@ -60,7 +60,7 @@ depends = ["_install"]
 run = "pnpm run build:workspace && node scripts/production/cli.mjs build-release"
 
 [tasks."install:service"]
-description = "Install, start, restart, and verify the systemd user service"
+description = "Perform the initial install, start, restart, and verification of the systemd user service"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail

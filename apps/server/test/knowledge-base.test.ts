@@ -84,6 +84,7 @@ describe("Knowledge Base", () => {
     expect(knowledgeBase.status()).toEqual({
       state: "ready",
       degradedCount: 3,
+      homeDocument: "available",
     });
     expect(document).toMatchObject({
       path: "index.md",
@@ -508,6 +509,7 @@ describe("Knowledge Base", () => {
       expect(knowledgeBase.status()).toEqual({
         state: "ready",
         degradedCount: 1,
+        homeDocument: "available",
       });
       expect(await knowledgeBase.openDocument("Недоступный.md")).toMatchObject({
         diagnostics: [{ code: "DOCUMENT_UNREADABLE" }],
@@ -682,7 +684,9 @@ describe("Knowledge Base", () => {
     await knowledgeBase.initialize();
 
     expect(knowledgeBase.status()).toEqual({
-      state: "home-document-unavailable",
+      state: "ready",
+      degradedCount: 0,
+      homeDocument: "unavailable",
     });
     await expect(knowledgeBase.openHomeDocument()).resolves.toBeUndefined();
   });
@@ -703,7 +707,9 @@ describe("Knowledge Base", () => {
     await knowledgeBase.initialize();
 
     expect(knowledgeBase.status()).toEqual({
-      state: "home-document-unavailable",
+      state: "ready",
+      degradedCount: 1,
+      homeDocument: "unavailable",
     });
     await expect(knowledgeBase.openHomeDocument()).resolves.toBeUndefined();
   });

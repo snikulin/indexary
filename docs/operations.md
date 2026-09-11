@@ -113,9 +113,9 @@ part of an immutable artifact.
 
 ## Persistent user service
 
-Installation is an intentional persistent host mutation. Supply the Knowledge
-Base as an explicit absolute path; shell expansion of a user-specific value must
-happen before the task receives it:
+Initial installation is an intentional persistent host mutation. Supply the
+Knowledge Base as an explicit absolute path; shell expansion of a user-specific
+value must happen before the task receives it:
 
 ```sh
 mise run install:service -- /absolute/release/directory /absolute/knowledge-base [port]
@@ -130,6 +130,15 @@ liveness, readiness, same-origin frontend behavior, and structured journald
 events. A deliberate `systemctl --user restart` proves graceful shutdown and a
 new managed invocation. Success is reported only if the Knowledge Base still
 has the exact pre-installation bytes.
+
+Readiness becomes successful once the derived catalog is usable. Its
+`homeDocument` field is `available` or `unavailable`; the latter preserves the
+explicit non-fatal state until the owner supplies `/index.md` outside Indexary
+at the human production checkpoint.
+
+After successful initial installation, this task refuses to select another
+release. Subsequent release activation belongs to the safe deployment and
+rollback workflow in Issue #14.
 
 The installed unit invokes only absolute paths below `current`, uses
 `Restart=on-failure`, and is enabled for `default.target`. It does not invoke a
