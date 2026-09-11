@@ -1,0 +1,11 @@
+packages:
+  - apps/server
+  - apps/web
+
+# pnpm does not run dependency lifecycle scripts unless an exception is reviewed
+# and added here. strictDepBuilds turns a newly introduced script into a failure.
+# esbuild installs its platform binary for the pinned Vite/Vitest/tsx toolchain.
+allowBuilds:
+  esbuild: true
+strictDepBuilds: true
+minimumReleaseAge: 1440

@@ -2,7 +2,10 @@
 
 **An open-source, local-first web interface for exploring filesystem-based knowledge bases.**
 
-> Project status: architecture and product definition. Implementation has not started yet.
+> Project status: the complete read-only Atlas is verified for daily use from this
+> checkout. Immutable per-user releases, the systemd user-service lifecycle, and
+> safe manual deploy/rollback are implemented. Tailscale activation and the human
+> production checkpoint remain pending.
 
 ## Overview
 
@@ -65,9 +68,7 @@ Architectural principles:
 - Node.js
 - TypeScript
 - Fastify
-- Zod or TypeBox for request and response validation
-
-The validation library will be selected during implementation.
+- TypeBox for request and response validation
 
 ## Access model
 
@@ -93,6 +94,53 @@ Authentication and public internet deployment are outside the initial scope.
 ## Future direction
 
 Possible later capabilities include semantic search, additional filesystem-based formats, multiple knowledge sources, configurable metadata views, and agent-oriented integration points. These should remain optional layers over user-owned data.
+
+## Project documentation
+
+- [Domain language](CONTEXT.md)
+- [Development process](docs/development.md)
+- [Initial operating model](docs/operations.md)
+- [Architecture decisions](docs/adr/)
+
+## Development
+
+Install the pinned toolchain with `mise install`, then use the public task interface:
+
+- `mise run dev` starts the synthetic fixture on loopback;
+- `mise run dev:kb -- <path>` starts against one explicitly selected personal Knowledge Base;
+- `mise run test` runs unit and assembled-server integration tests;
+- `mise run build` creates the optimized same-origin application;
+- `mise run check` runs formatting, linting, types, focused tests, assembled Fastify
+  integration tests, the optimized build, and the short browser smoke;
+- `mise run perf:index` checks the generated 10,000-Document support target;
+- `mise run smoke:kb`, with an existing non-empty `INDEXARY_KB_PATH`, starts
+  the privacy-safe manual personal smoke and verifies that the selected
+  Knowledge Base has the same bytes after the session;
+- `mise run release` assembles a clean commit as an immutable release containing
+  the exact Node 24 Linux x64 runtime and production application;
+- `mise run smoke:release -- <release-directory>` checks that release directly
+  outside the checkout and through an isolated transient systemd user service;
+- `mise run install:service -- <release> <absolute-kb> [port]` installs and
+  verifies the persistent user service;
+- `mise run deploy` runs the complete local gate, stages and smokes an isolated
+  candidate, accepts brief restart downtime, atomically activates it, verifies
+  the local service path, and rolls back automatically on failure;
+- `mise run deploy:rehearse-rollback` deliberately fails after activation to
+  prove that the exact preceding release is restored and ready (successfully
+  proving rollback still returns a nonzero command result);
+- `mise run deployment:status` reports the privacy-safe transaction state and
+  next action, while `mise run recover:deployment` completes an interrupted
+  rollback;
+- `mise run verify:service` rechecks the installed service and the byte-for-byte
+  read-only boundary.
+
+Dependency installation is frozen by the lockfile, and every public task that can touch the
+synthetic Knowledge Base verifies that its tree remains byte-for-byte unchanged.
+The [daily-use checkout evidence](docs/daily-use-checkout.md) records the
+reproducible gate and the content-safe manual personal checklist.
+The [operations guide](docs/operations.md) describes the installed XDG layout,
+host prerequisites, diagnostics, and the boundary before deployment and private
+network cutover.
 
 ## License
 

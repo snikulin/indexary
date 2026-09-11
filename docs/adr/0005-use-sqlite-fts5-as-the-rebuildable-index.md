@@ -1,0 +1,3 @@
+# Use SQLite FTS5 as the rebuildable index
+
+Indexary v1 keeps Document search data, metadata, link edges, Source Materials, and Attachments in one versioned SQLite database below `$XDG_CACHE_HOME/indexary`, using FTS5 through the pinned Node 24 `node:sqlite` API behind a narrow adapter. This accepts the release-candidate status and synchronous API in exchange for BM25 ranking, snippets, Unicode tokenization, transactions, and deployment without a native npm dependency; startup verifies FTS5 support, and an incompatible or corrupt database is rebuilt and atomically replaced. V1 search supports exact Unicode words, phrases, and prefixes, while morphology and typo correction remain outside its contract.

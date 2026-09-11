@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Схема тестовой Базы знаний">
+  <rect width="320" height="180" fill="#f4f1e9" />
+  <circle cx="90" cy="90" r="42" fill="#30483b" />
+  <path d="M132 90h76" stroke="#a45d37" stroke-width="8" />
+  <rect x="208" y="54" width="76" height="72" rx="8" fill="#dce5d8" />
+</svg>

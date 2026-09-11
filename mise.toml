@@ -1,0 +1,110 @@
+min_version = "2026.9.1"
+
+[tools]
+node = "24.21.0"
+pnpm = "12.4.0"
+
+[settings]
+lockfile = true
+
+[tasks._install]
+hide = true
+run = "pnpm install --frozen-lockfile"
+
+[tasks.dev]
+description = "Run Indexary against the synthetic Knowledge Base"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run dev -- --knowledge-base fixtures/knowledge-base --profile fixture --port 4173"
+
+[tasks."dev:kb"]
+description = "Run Indexary against an explicitly selected personal Knowledge Base"
+depends = ["_install"]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -ne 1 || -z "$1" ]]; then
+  echo "Usage: mise run dev:kb -- <knowledge-base-path>" >&2
+  exit 2
+fi
+pnpm run dev -- --knowledge-base "$1" --profile personal --port 4174
+'''
+
+[tasks."smoke:kb"]
+description = "Run the privacy-safe manual personal Knowledge Base smoke"
+depends = ["_install"]
+run = "node scripts/verify-personal-read-only.mjs"
+
+[tasks.test]
+description = "Run focused and assembled Fastify integration tests"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run test:workspace"
+
+[tasks.build]
+description = "Build the optimized same-origin application"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run build:workspace"
+
+[tasks."perf:index"]
+description = "Measure the generated v1 index and search support target"
+depends = ["_install"]
+run = "pnpm --filter @indexary/server build && node scripts/verify-index-interruption.mjs && node scripts/benchmark-index.mjs"
+
+[tasks.check]
+description = "Run the complete local quality gate"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run check:workspace"
+
+[tasks.release]
+description = "Build an immutable per-user production release"
+depends = ["_install"]
+run = "pnpm run build:workspace && node scripts/production/cli.mjs build-release"
+
+[tasks."install:service"]
+description = "Perform the initial install, start, restart, and verification of the systemd user service"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -lt 2 || $# -gt 3 || -z "$1" || -z "$2" ]]; then
+  echo "Usage: mise run install:service -- <release-directory> <absolute-knowledge-base-path> [port]" >&2
+  exit 2
+fi
+args=(install-service --release "$1" --knowledge-base "$2")
+if [[ $# -eq 3 ]]; then
+  args+=(--port "$3")
+fi
+node scripts/production/cli.mjs "${args[@]}"
+'''
+
+[tasks."verify:service"]
+description = "Verify the installed user service and read-only boundary"
+run = "node scripts/production/cli.mjs verify-service"
+
+[tasks.deploy]
+description = "Build, smoke, activate, and verify one immutable release with automatic rollback"
+run = "node scripts/production/cli.mjs deploy"
+
+[tasks."deploy:rehearse-rollback"]
+description = "Activate a verified candidate and deliberately prove automatic rollback"
+run = "node scripts/production/cli.mjs deploy --rehearse-rollback"
+
+[tasks."recover:deployment"]
+description = "Recover the preceding release from an interrupted deployment transaction"
+run = "node scripts/production/cli.mjs recover-deployment"
+
+[tasks."deployment:status"]
+description = "Report privacy-safe deployment transaction status and the next action"
+run = "node scripts/production/cli.mjs deployment-status"
+
+[tasks."smoke:release"]
+description = "Verify a release outside the checkout and through a transient user service"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -lt 1 || $# -gt 2 || -z "$1" ]]; then
+  echo "Usage: mise run smoke:release -- <release-directory> [absolute-knowledge-base-path]" >&2
+  exit 2
+fi
+knowledge_base="${2:-$PWD/fixtures/knowledge-base}"
+node scripts/production/cli.mjs smoke-release --release "$1" --knowledge-base "$knowledge_base"
+node scripts/production/cli.mjs smoke-release --release "$1" --knowledge-base "$knowledge_base" --managed
+'''

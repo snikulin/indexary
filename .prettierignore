@@ -1,0 +1,6 @@
+# Preserve the pre-existing hand-aligned triage table.
+docs/agents/triage-labels.md
+
+# Generated lock data is maintained by its owning tool.
+mise.lock
+pnpm-lock.yaml

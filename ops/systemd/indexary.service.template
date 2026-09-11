@@ -1,0 +1,19 @@
+[Unit]
+Description=Indexary personal knowledge atlas
+After=network.target
+
+[Service]
+Type=exec
+EnvironmentFile={{ENVIRONMENT_FILE}}
+ExecStart={{NODE_EXECUTABLE}} {{SERVER_ENTRYPOINT}}
+Restart=on-failure
+RestartSec=2s
+TimeoutStartSec=90s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=indexary
+
+[Install]
+WantedBy=default.target
