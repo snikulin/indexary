@@ -35,6 +35,7 @@ export interface DocumentRepresentation<DocumentPath extends string = string> {
   searchableText: string;
   tags: string[];
   sourceMaterials: string[];
+  attachmentPaths: string[];
   properties: DocumentProperty[];
   diagnostics: DocumentDiagnostic[];
 }
@@ -235,6 +236,49 @@ function textContent(node: MarkdownNode): string {
   return (node.children ?? []).map(textContent).join(" ");
 }
 
+function attachmentPath(url: string): string | undefined {
+  const value = url.trim();
+  if (
+    value === "" ||
+    value.startsWith("#") ||
+    value.startsWith("//") ||
+    /^[a-z][a-z\d+.-]*:/i.test(value)
+  ) {
+    return undefined;
+  }
+
+  const pathname = value.split(/[?#]/, 1)[0] ?? "";
+  if (pathname === "") {
+    return undefined;
+  }
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    decoded = pathname;
+  }
+  return decoded.toLowerCase().endsWith(".md") ? undefined : decoded;
+}
+
+function collectAttachmentPaths(node: MarkdownNode): string[] {
+  const paths: string[] = [];
+
+  function visit(current: MarkdownNode): void {
+    if (current.type === "link" || current.type === "image") {
+      const candidate = attachmentPath(current.url ?? "");
+      if (candidate !== undefined && !paths.includes(candidate)) {
+        paths.push(candidate);
+      }
+    }
+    for (const child of current.children ?? []) {
+      visit(child);
+    }
+  }
+
+  visit(node);
+  return paths;
+}
+
 export function isSafeDocumentUrl(value: string): boolean {
   let decoded: string;
   try {
@@ -388,6 +432,7 @@ export async function interpretDocument<DocumentPath extends string>(
   }
 
   const bodyText = textContent(tree);
+  const attachmentPaths = collectAttachmentPaths(tree);
   secureMarkdown(tree, diagnostics);
   const renderer = unified()
     .use(remarkRehype)
@@ -409,6 +454,7 @@ export async function interpretDocument<DocumentPath extends string>(
     searchableText,
     tags,
     sourceMaterials,
+    attachmentPaths,
     properties,
     diagnostics,
   };
@@ -424,6 +470,7 @@ export function unreadableDocument<DocumentPath extends string>(
     searchableText: filenameTitle(documentPath),
     tags: [],
     sourceMaterials: [],
+    attachmentPaths: [],
     properties: [],
     diagnostics: [
       {

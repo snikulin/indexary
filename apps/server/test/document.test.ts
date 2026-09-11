@@ -37,6 +37,8 @@ const ready = true;
 \`\`\`
 
 [Сайт](https://example.com) и [почта](mailto:user@example.com).
+[Вложение](../файлы/снимок%20экрана.png?raw=1#preview)
+[Документ](другой.md)
 `,
     );
 
@@ -63,6 +65,7 @@ const ready = true;
     expect(document.searchableText).toContain("Обзор Базы знаний");
     expect(document.searchableText).toContain("русский");
     expect(document.searchableText).toContain("const ready = true;");
+    expect(document.attachmentPaths).toEqual(["../файлы/снимок экрана.png"]);
   });
 
   test("selects title by precedence and removes only a selected H1", async () => {
@@ -173,6 +176,7 @@ published: true
       searchableText: "секретный",
       tags: [],
       sourceMaterials: [],
+      attachmentPaths: [],
       properties: [],
       diagnostics: [
         {

@@ -5,8 +5,24 @@ export interface DocumentRepresentation {
   searchableText: string;
   tags: string[];
   sourceMaterials: string[];
+  materials: {
+    sourceMaterials: MaterialReference[];
+    attachments: MaterialReference[];
+  };
   properties: Array<{ name: string; value: string }>;
   diagnostics: Array<{ code: string; message: string }>;
+}
+
+export interface MaterialReference {
+  id: string;
+  kind: "source-material" | "attachment";
+  name: string;
+  path: string;
+  status: "available" | "missing" | "invalid";
+  mimeType: string;
+  size: number | null;
+  preview: "image" | "pdf" | "unsupported";
+  diagnostic?: { code: string; message: string };
 }
 
 export interface CatalogFolder {
@@ -61,4 +77,11 @@ export function fetchCatalog(folderPath = ""): Promise<CatalogFolder> {
   }
   const suffix = query.size === 0 ? "" : `?${query}`;
   return fetchJson<CatalogFolder>(`/api/catalog${suffix}`);
+}
+
+export function materialUrl(documentPath: string, materialId: string): string {
+  return `/api/materials?${new URLSearchParams({
+    document: documentPath,
+    id: materialId,
+  })}`;
 }

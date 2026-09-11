@@ -4,6 +4,7 @@ import {
   BookOpenText,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   FileText,
   FolderClosed,
   Menu,
@@ -13,7 +14,14 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { documentRoute, fetchCatalog, fetchDocument, folderRoute } from "./api";
+import {
+  documentRoute,
+  fetchCatalog,
+  fetchDocument,
+  folderRoute,
+  materialUrl,
+  type MaterialReference,
+} from "./api";
 import { Button } from "./components/ui/button";
 import { ru } from "./i18n/ru";
 
@@ -196,6 +204,27 @@ function Context({
     enabled: documentPath !== undefined,
     retry: false,
   });
+  const [activeSection, setActiveSection] = useState<string>(ru.properties);
+  const [selectedMaterialId, setSelectedMaterialId] = useState<string>();
+
+  useEffect(() => {
+    setActiveSection(ru.properties);
+    setSelectedMaterialId(undefined);
+  }, [documentPath]);
+
+  const materialKind =
+    activeSection === ru.sources
+      ? "sourceMaterials"
+      : activeSection === ru.attachments
+        ? "attachments"
+        : undefined;
+  const materials =
+    materialKind === undefined
+      ? []
+      : (documentQuery.data?.materials[materialKind] ?? []);
+  const selectedMaterial =
+    materials.find((material) => material.id === selectedMaterialId) ??
+    materials[0];
 
   return (
     <aside className="context-panel" aria-label={ru.context}>
@@ -210,33 +239,62 @@ function Context({
           </Button>
         ) : null}
       </div>
-      <div className="context-tabs" aria-label={ru.contextSections}>
+      <div
+        className="context-tabs"
+        role="tablist"
+        aria-label={ru.contextSections}
+      >
         {contextSections.map((section) => (
           <button
             key={section}
-            className={section === ru.properties ? "selected" : ""}
+            className={section === activeSection ? "selected" : ""}
             type="button"
+            role="tab"
+            aria-selected={section === activeSection}
+            onClick={() => {
+              setActiveSection(section);
+              setSelectedMaterialId(undefined);
+            }}
           >
             {section}
           </button>
         ))}
       </div>
       {documentQuery.data ? (
-        <section className="properties" aria-labelledby="properties-heading">
-          <h3 id="properties-heading">{ru.properties}</h3>
-          {documentQuery.data.properties.length > 0 ? (
-            <dl>
-              {documentQuery.data.properties.map((property) => (
-                <div key={property.name}>
-                  <dt>{property.name}</dt>
-                  <dd>{property.value}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : (
-            <p>{ru.noProperties}</p>
-          )}
-        </section>
+        activeSection === ru.properties ? (
+          <section
+            className="properties"
+            role="tabpanel"
+            aria-labelledby="properties-heading"
+          >
+            <h3 id="properties-heading">{ru.properties}</h3>
+            {documentQuery.data.properties.length > 0 ? (
+              <dl>
+                {documentQuery.data.properties.map((property) => (
+                  <div key={property.name}>
+                    <dt>{property.name}</dt>
+                    <dd>{property.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p>{ru.noProperties}</p>
+            )}
+          </section>
+        ) : materialKind !== undefined ? (
+          <MaterialPanel
+            documentPath={documentQuery.data.path}
+            heading={activeSection}
+            materials={materials}
+            selected={selectedMaterial}
+            select={setSelectedMaterialId}
+          />
+        ) : (
+          <div className="empty-context" role="tabpanel">
+            <FileText aria-hidden="true" />
+            <p>{ru.emptyContext}</p>
+          </div>
+        )
       ) : (
         <div className="empty-context">
           <FileText aria-hidden="true" />
@@ -244,6 +302,108 @@ function Context({
         </div>
       )}
     </aside>
+  );
+}
+
+function formatMaterialSize(size: number | null): string {
+  if (size === null) {
+    return ru.unknownSize;
+  }
+  if (size < 1024) {
+    return `${size} Б`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} КБ`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function MaterialPanel({
+  documentPath,
+  heading,
+  materials,
+  selected,
+  select,
+}: {
+  documentPath: string;
+  heading: string;
+  materials: MaterialReference[];
+  selected: MaterialReference | undefined;
+  select: (id: string) => void;
+}) {
+  return (
+    <section className="materials" role="tabpanel" aria-label={heading}>
+      <h3>{heading}</h3>
+      {materials.length === 0 ? (
+        <p className="empty-materials">{ru.noMaterials}</p>
+      ) : (
+        <>
+          <ul className="material-list">
+            {materials.map((material) => (
+              <li key={material.id}>
+                <button
+                  type="button"
+                  className={material.id === selected?.id ? "selected" : ""}
+                  aria-pressed={material.id === selected?.id}
+                  onClick={() => select(material.id)}
+                >
+                  <span>{material.name}</span>
+                  <small>
+                    {material.status === "available"
+                      ? material.mimeType
+                      : ru.materialUnavailable}
+                  </small>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {selected ? (
+            <div className="material-detail">
+              <h4>{selected.name}</h4>
+              <dl>
+                <div>
+                  <dt>{ru.materialType}</dt>
+                  <dd>{selected.mimeType}</dd>
+                </div>
+                <div>
+                  <dt>{ru.materialSize}</dt>
+                  <dd>{formatMaterialSize(selected.size)}</dd>
+                </div>
+              </dl>
+              {selected.diagnostic ? (
+                <p className="material-diagnostic" role="status">
+                  {selected.diagnostic.message}
+                </p>
+              ) : selected.preview === "image" ? (
+                <img
+                  className="material-preview image-preview"
+                  src={materialUrl(documentPath, selected.id)}
+                  alt={selected.name}
+                />
+              ) : selected.preview === "pdf" ? (
+                <iframe
+                  className="material-preview pdf-preview"
+                  src={materialUrl(documentPath, selected.id)}
+                  title={`${ru.pdfPreview}: ${selected.name}`}
+                />
+              ) : (
+                <a
+                  className="material-open"
+                  href={materialUrl(documentPath, selected.id)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink aria-hidden="true" />
+                  {ru.openMaterial}
+                </a>
+              )}
+            </div>
+          ) : (
+            <p className="empty-materials">{ru.noMaterials}</p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 

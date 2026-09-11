@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { documentRoute, folderRoute } from "../src/api";
@@ -12,6 +18,7 @@ const home = {
   searchableText: "Домашний документ Содержимое",
   tags: ["важное"],
   sourceMaterials: [],
+  materials: { sourceMaterials: [], attachments: [] },
   properties: [
     { name: "tags", value: "[важное]" },
     { name: "status", value: "в работе" },
@@ -147,5 +154,101 @@ describe("Atlas", () => {
     expect(documentRoute("Раздел с пробелом/Проект Альфа.md")).toBe(
       "/documents/%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%20%D1%81%20%D0%BF%D1%80%D0%BE%D0%B1%D0%B5%D0%BB%D0%BE%D0%BC/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%20%D0%90%D0%BB%D1%8C%D1%84%D0%B0.md",
     );
+  });
+
+  test("switches among Source Materials and Attachments without leaving the Document", async () => {
+    const materialDocument = {
+      ...home,
+      materials: {
+        sourceMaterials: [
+          {
+            id: "source-material-0",
+            kind: "source-material",
+            name: "схема.svg",
+            path: "materials/схема.svg",
+            status: "available",
+            mimeType: "image/svg+xml",
+            size: 320,
+            preview: "image",
+          },
+          {
+            id: "source-material-1",
+            kind: "source-material",
+            name: "источник.pdf",
+            path: "materials/источник.pdf",
+            status: "available",
+            mimeType: "application/pdf",
+            size: 2048,
+            preview: "pdf",
+          },
+          {
+            id: "source-material-2",
+            kind: "source-material",
+            name: "нет.pdf",
+            path: "materials/нет.pdf",
+            status: "missing",
+            mimeType: "application/pdf",
+            size: null,
+            preview: "pdf",
+            diagnostic: {
+              code: "MATERIAL_MISSING",
+              message: "Материал не найден.",
+            },
+          },
+        ],
+        attachments: [
+          {
+            id: "attachment-0",
+            kind: "attachment",
+            name: "черновик.docx",
+            path: "files/черновик.docx",
+            status: "available",
+            mimeType:
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            size: 100,
+            preview: "unsupported",
+          },
+        ],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => ({
+        ok: true,
+        json: async () =>
+          String(input).startsWith("/api/catalog")
+            ? rootCatalog
+            : materialDocument,
+      })),
+    );
+    renderAtlas();
+
+    fireEvent.click(
+      await screen.findByRole("tab", { name: "Исходные материалы" }),
+    );
+    expect(
+      await screen.findByRole("img", { name: "схема.svg" }),
+    ).toHaveAttribute(
+      "src",
+      "/api/materials?document=index.md&id=source-material-0",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /источник\.pdf/ }));
+    expect(screen.getByTitle("Предпросмотр PDF: источник.pdf")).toHaveAttribute(
+      "src",
+      "/api/materials?document=index.md&id=source-material-1",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /нет\.pdf/ }));
+    expect(screen.getByRole("status")).toHaveTextContent("Материал не найден");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Вложения" }));
+    expect(
+      screen.getByRole("link", { name: "Открыть материал" }),
+    ).toHaveAttribute(
+      "href",
+      "/api/materials?document=index.md&id=attachment-0",
+    );
+    expect(
+      screen.getByRole("heading", { name: "Домашний документ" }),
+    ).toBeInTheDocument();
   });
 });

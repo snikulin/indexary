@@ -39,6 +39,81 @@ const DocumentResponse = Type.Object(
     searchableText: Type.String(),
     tags: Type.Array(Type.String({ minLength: 1 })),
     sourceMaterials: Type.Array(Type.String({ minLength: 1 })),
+    materials: Type.Object(
+      {
+        sourceMaterials: Type.Array(
+          Type.Object(
+            {
+              id: Type.String({ minLength: 1 }),
+              kind: Type.Union([
+                Type.Literal("source-material"),
+                Type.Literal("attachment"),
+              ]),
+              name: Type.String({ minLength: 1 }),
+              path: Type.String({ minLength: 1 }),
+              status: Type.Union([
+                Type.Literal("available"),
+                Type.Literal("missing"),
+                Type.Literal("invalid"),
+              ]),
+              mimeType: Type.String({ minLength: 1 }),
+              size: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+              preview: Type.Union([
+                Type.Literal("image"),
+                Type.Literal("pdf"),
+                Type.Literal("unsupported"),
+              ]),
+              diagnostic: Type.Optional(
+                Type.Object(
+                  {
+                    code: Type.String({ minLength: 1 }),
+                    message: Type.String({ minLength: 1 }),
+                  },
+                  { additionalProperties: false },
+                ),
+              ),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+        attachments: Type.Array(
+          Type.Object(
+            {
+              id: Type.String({ minLength: 1 }),
+              kind: Type.Union([
+                Type.Literal("source-material"),
+                Type.Literal("attachment"),
+              ]),
+              name: Type.String({ minLength: 1 }),
+              path: Type.String({ minLength: 1 }),
+              status: Type.Union([
+                Type.Literal("available"),
+                Type.Literal("missing"),
+                Type.Literal("invalid"),
+              ]),
+              mimeType: Type.String({ minLength: 1 }),
+              size: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+              preview: Type.Union([
+                Type.Literal("image"),
+                Type.Literal("pdf"),
+                Type.Literal("unsupported"),
+              ]),
+              diagnostic: Type.Optional(
+                Type.Object(
+                  {
+                    code: Type.String({ minLength: 1 }),
+                    message: Type.String({ minLength: 1 }),
+                  },
+                  { additionalProperties: false },
+                ),
+              ),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
     properties: Type.Array(
       Type.Object(
         {
@@ -67,11 +142,63 @@ const ErrorResponse = Type.Object(
       Type.Literal("DOCUMENT_NOT_FOUND"),
       Type.Literal("FOLDER_NOT_FOUND"),
       Type.Literal("INVALID_KNOWLEDGE_BASE_PATH"),
+      Type.Literal("MATERIAL_NOT_FOUND"),
     ]),
     message: Type.String(),
   },
   { additionalProperties: false },
 );
+
+interface ByteRange {
+  start: number;
+  end: number;
+}
+
+export function parseByteRange(
+  header: string | undefined,
+  size: number,
+): ByteRange | "ignore" | "unsatisfiable" | undefined {
+  if (header === undefined) {
+    return undefined;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header);
+  if (match === null || (match[1] === "" && match[2] === "")) {
+    return "ignore";
+  }
+
+  const startText = match[1] ?? "";
+  const endText = match[2] ?? "";
+  if (startText === "") {
+    const suffixLength = Number(endText);
+    if (
+      !Number.isSafeInteger(suffixLength) ||
+      suffixLength <= 0 ||
+      size === 0
+    ) {
+      return "unsatisfiable";
+    }
+    return { start: Math.max(0, size - suffixLength), end: size - 1 };
+  }
+
+  const start = Number(startText);
+  const requestedEnd = endText === "" ? size - 1 : Number(endText);
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(requestedEnd) ||
+    start >= size ||
+    requestedEnd < start
+  ) {
+    return "unsatisfiable";
+  }
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
+function contentDispositionFilename(name: string): string {
+  return encodeURIComponent(name).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
 const PathQuery = Type.Object(
   { path: Type.Optional(Type.String()) },
   { additionalProperties: false },
@@ -200,6 +327,83 @@ export async function buildApplication(
           });
         }
         return document;
+      } catch (error) {
+        if (error instanceof InvalidKnowledgeBasePath) {
+          return reply.status(400).send({
+            code: "INVALID_KNOWLEDGE_BASE_PATH" as const,
+            message: "Путь внутри Базы знаний недопустим.",
+          });
+        }
+        throw error;
+      }
+    },
+  );
+
+  typedApp.get(
+    "/api/materials",
+    {
+      schema: {
+        querystring: Type.Object(
+          {
+            document: Type.String({ minLength: 1 }),
+            id: Type.String({ minLength: 1 }),
+          },
+          { additionalProperties: false },
+        ),
+      },
+    },
+    async (request, reply) => {
+      try {
+        const material = await knowledgeBase.openMaterial(
+          request.query.document,
+          request.query.id,
+        );
+        if (material === undefined) {
+          return reply.status(404).send({
+            code: "MATERIAL_NOT_FOUND" as const,
+            message: "Материал недоступен.",
+          });
+        }
+
+        const range = parseByteRange(request.headers.range, material.size);
+        const disposition =
+          material.preview === "unsupported" ? "attachment" : "inline";
+        reply.headers({
+          "accept-ranges": "bytes",
+          "cache-control": "private, no-store",
+          "content-disposition": `${disposition}; filename*=UTF-8''${contentDispositionFilename(material.name)}`,
+          "content-type": material.mimeType,
+          "x-content-type-options": "nosniff",
+        });
+        if (material.mimeType === "image/svg+xml") {
+          reply.header(
+            "content-security-policy",
+            "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+          );
+        }
+
+        if (range === "unsatisfiable") {
+          await material.file.close();
+          return reply
+            .header("content-range", `bytes */${material.size}`)
+            .status(416)
+            .send();
+        }
+        if (range === undefined || range === "ignore") {
+          reply.header("content-length", material.size);
+          return reply.send(material.file.createReadStream());
+        }
+
+        reply.headers({
+          "content-length": range.end - range.start + 1,
+          "content-range": `bytes ${range.start}-${range.end}/${material.size}`,
+        });
+        return reply.status(206).send(
+          material.file.createReadStream({
+            start: range.start,
+            end: range.end,
+          }),
+        );
       } catch (error) {
         if (error instanceof InvalidKnowledgeBasePath) {
           return reply.status(400).send({

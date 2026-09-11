@@ -89,3 +89,30 @@ test("catalog omits hidden Documents and keeps ordinary folder names", async ({
     false,
   );
 });
+
+test("previews and switches referenced materials in the Document context", async ({
+  page,
+}) => {
+  await page.goto(
+    "/documents/%D0%9F%D1%83%D1%82%D0%B5%D0%B2%D0%BE%D0%B4%D0%B8%D1%82%D0%B5%D0%BB%D1%8C.md",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Путеводитель", level: 1 }),
+  ).toBeVisible();
+
+  await page.getByRole("tab", { name: "Исходные материалы" }).click();
+  await expect(page.getByTitle("Предпросмотр PDF: источник.pdf")).toBeVisible();
+  await page.getByRole("button", { name: /схема\.svg/ }).click();
+  await expect(page.getByRole("img", { name: "схема.svg" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /письмо\.eml/ })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Вложения" }).click();
+  await expect(
+    page.getByRole("link", { name: "Открыть материал" }),
+  ).toHaveAttribute("target", "_blank");
+  await page.getByRole("button", { name: /нет-файла\.dat/ }).click();
+  await expect(page.getByRole("status")).toContainText("Материал не найден");
+  await expect(
+    page.getByRole("heading", { name: "Путеводитель", level: 1 }),
+  ).toBeVisible();
+});
