@@ -1327,7 +1327,7 @@ async function stopChild(child) {
   child.kill("SIGTERM");
   return Promise.race([
     new Promise((resolve) => {
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      child.once("close", (code, signal) => resolve({ code, signal }));
     }),
     new Promise((_, reject) =>
       setTimeout(
@@ -1364,6 +1364,15 @@ async function smokeDirectRelease({
   let verificationError;
   try {
     await verifyLocalApplication(port, requireReady);
+    if (requireReady) {
+      await eventually(async () => {
+        if (!output.includes('"event":"ready"')) {
+          throw new ProductionError(
+            "The release did not emit its readiness lifecycle event.",
+          );
+        }
+      }, 10_000);
+    }
   } catch (error) {
     verificationError = error;
   }
