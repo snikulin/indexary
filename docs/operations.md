@@ -137,8 +137,8 @@ explicit non-fatal state until the owner supplies `/index.md` outside Indexary
 at the human production checkpoint.
 
 After successful initial installation, this task refuses to select another
-release. Subsequent release activation belongs to the safe deployment and
-rollback workflow in Issue #14.
+release. Subsequent release activation uses the safe deployment and rollback
+workflow below.
 
 The installed unit invokes only absolute paths below `current`, uses
 `Restart=on-failure`, and is enabled for `default.target`. It does not invoke a
@@ -158,11 +158,78 @@ the Knowledge Base before and after. Liveness is
 `http://127.0.0.1:4176/api/health/live` and readiness is
 `http://127.0.0.1:4176/api/health/ready` unless the persisted port differs.
 
+## Safe manual deployment and rollback
+
+Run the one normal deployment command from a clean commit:
+
+```sh
+mise run deploy
+```
+
+The command refuses dirty or unidentifiable source state. It runs the complete
+local quality gate before staging anything, then assembles an immutable release
+whose manifest identifies that exact commit and complete bundled runtime. It
+starts the candidate with its bundled Node executable on an unused loopback
+port, a unique runtime profile, and a disposable cache namespace. Candidate
+smoke requires privacy-safe liveness and readiness, the Home Document response
+or explicit unavailable state, same-origin HTML, the root catalog, a meaningful
+search result, and a one-byte range from an available Source Material or
+Attachment. Values selected during smoke remain in memory and are never printed.
+
+Only after candidate smoke succeeds does deployment record an activation intent
+and atomically replace `current`. It updates the private external environment,
+reports the start of brief restart downtime, restarts `indexary.service`, and
+requires the managed process to use the selected bundled runtime. Readiness and
+the complete local application smoke must pass within bounded time. This is a
+single-service restart: there is no blue/green deployment, automatic updater,
+ambient runtime, or public listener.
+
+Every transaction is recorded atomically at
+`$XDG_STATE_HOME/indexary/deployment.json`; it contains release identities and
+phase status, never Knowledge Base paths, Document names, content, metadata, or
+material identifiers. Only one deployment lock may exist. A handled
+interruption or any gate/staging/candidate/activation/restart/readiness/post-smoke
+failure restores the recorded preceding release, rewrites its release identity
+in private configuration, restarts it, and requires it to become ready. The
+candidate process group and disposable candidate cache are always stopped and
+removed.
+
+Exercise real rollback after at least one predecessor exists:
+
+```sh
+mise run deploy:rehearse-rollback
+```
+
+This uses the same workflow and injects failure only after the candidate has
+been activated and locally verified. A successful rehearsal deliberately exits
+nonzero after restoring the exact preceding selector and proving that the
+service is ready. It does not damage an artifact, cache, or the Knowledge Base.
+
+An interrupted invocation is safe to rerun: `mise run deploy` first recovers
+any unfinished transaction. These commands provide an explicit inspection and
+recovery path when operating manually:
+
+```sh
+mise run deployment:status
+mise run recover:deployment
+mise run verify:service
+```
+
+If automatic rollback itself cannot finish, stop and run the reported recovery
+command; do not edit `current` by hand. Status output includes only safe release
+identities and one next action. Abandoned contained staging directories are
+removed on the next safe run; an unknown or symbolic-link target is refused.
+
+After a deployment is fully verified and the Knowledge Base fingerprint remains
+identical, retention keeps the active release and its two successful
+predecessors. Pruning validates every exact child of `releases/`, never follows
+symbolic links, and never touches configuration, transaction state, the active
+production cache, or a candidate cache.
+
 ## Pending production boundary
 
-Issue #13 supplies release and user-service mechanics only. There is not yet one
-safe deployment command, candidate activation, automatic rollback, or release
-retention; those are the scope of Issue #14. Neither release, installation,
-smoke, nor verification invokes `tailscale` or changes Tailscale Serve. Private
-tailnet policy, the persistent Serve route, any external Home Document rename,
-and the first-production declaration remain the human checkpoint in Issue #15.
+Release, installation, deployment, rollback, smoke, and verification never
+invoke `tailscale` or change Tailscale Serve. Private tailnet policy, the
+persistent Serve route, any external Home Document rename, owner-client smoke,
+acceptance of the exercised target-host rollback evidence, and the
+first-production declaration remain the human checkpoint in Issue #15.

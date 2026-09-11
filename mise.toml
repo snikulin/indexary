@@ -79,6 +79,22 @@ node scripts/production/cli.mjs "${args[@]}"
 description = "Verify the installed user service and read-only boundary"
 run = "node scripts/production/cli.mjs verify-service"
 
+[tasks.deploy]
+description = "Build, smoke, activate, and verify one immutable release with automatic rollback"
+run = "node scripts/production/cli.mjs deploy"
+
+[tasks."deploy:rehearse-rollback"]
+description = "Activate a verified candidate and deliberately prove automatic rollback"
+run = "node scripts/production/cli.mjs deploy --rehearse-rollback"
+
+[tasks."recover:deployment"]
+description = "Recover the preceding release from an interrupted deployment transaction"
+run = "node scripts/production/cli.mjs recover-deployment"
+
+[tasks."deployment:status"]
+description = "Report privacy-safe deployment transaction status and the next action"
+run = "node scripts/production/cli.mjs deployment-status"
+
 [tasks."smoke:release"]
 description = "Verify a release outside the checkout and through a transient user service"
 run = '''

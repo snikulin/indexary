@@ -45,6 +45,13 @@ The stable project interface is:
 - `mise run install:service -- <release> <absolute-kb> [port]`: perform the
   initial install, enable, start, restart, and verify the persistent user
   service; later releases must use the safe deployment workflow;
+- `mise run deploy`: from one clean commit, run the complete gate, build and
+  isolate a candidate, activate it with brief restart downtime, verify it, and
+  automatically restore the preceding release on failure;
+- `mise run deploy:rehearse-rollback`: inject a controlled post-activation
+  failure and prove the preceding service becomes ready again;
+- `mise run deployment:status` and `mise run recover:deployment`: inspect or
+  recover an interrupted transaction without exposing machine-local content;
 - `mise run verify:service`: verify the active release, service state, local
   application behavior, structured journal, and read-only boundary again.
 
@@ -68,6 +75,15 @@ dirty or unidentifiable source state. It does not select or start the result.
 Use `mise run smoke:release` for isolated artifact evidence before installing
 it. See [operations.md](operations.md) before running the persistent installation
 task.
+
+The deployment command also requires a clean identifiable commit and invokes
+the complete `mise run check` itself before it is allowed to stage a release.
+Its deterministic production tests use isolated XDG roots and fake service
+orchestration to cover quality-gate, staging, candidate, activation, restart,
+readiness, post-check, interruption, rollback, locking, containment, and
+retention failures. Candidate and post-activation smoke additionally exercise
+the Home Document state, root catalog, search, and a one-byte material response.
+No deployment test or command configures Tailscale.
 
 ## Development data
 

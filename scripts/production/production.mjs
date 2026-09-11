@@ -450,6 +450,9 @@ export async function runCommand(command, arguments_, options = {}) {
       env: options.env ?? process.env,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
+      ...(options.timeoutMilliseconds === undefined
+        ? {}
+        : { timeout: options.timeoutMilliseconds }),
     });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
@@ -1132,7 +1135,7 @@ function decodeEnvironmentValue(value) {
   return decoded;
 }
 
-async function readInstalledConfiguration(paths) {
+export async function readInstalledConfiguration(paths) {
   const text = await readFile(paths.environmentFile, "utf8").catch(() => {
     throw new ProductionError(
       "The installed service configuration is unavailable.",
@@ -1226,7 +1229,7 @@ export async function verifyInstalledService(
   return configuration;
 }
 
-async function unusedLoopbackPort() {
+export async function unusedLoopbackPort() {
   const { createServer } = await import("node:net");
   const server = createServer();
   await new Promise((resolve, reject) => {

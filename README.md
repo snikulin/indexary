@@ -3,9 +3,9 @@
 **An open-source, local-first web interface for exploring filesystem-based knowledge bases.**
 
 > Project status: the complete read-only Atlas is verified for daily use from this
-> checkout. Immutable per-user releases and the systemd user-service lifecycle are
-> implemented. Safe deploy/rollback, Tailscale activation, and the human production
-> checkpoint remain pending.
+> checkout. Immutable per-user releases, the systemd user-service lifecycle, and
+> safe manual deploy/rollback are implemented. Tailscale activation and the human
+> production checkpoint remain pending.
 
 ## Overview
 
@@ -122,6 +122,15 @@ Install the pinned toolchain with `mise install`, then use the public task inter
   outside the checkout and through an isolated transient systemd user service;
 - `mise run install:service -- <release> <absolute-kb> [port]` installs and
   verifies the persistent user service;
+- `mise run deploy` runs the complete local gate, stages and smokes an isolated
+  candidate, accepts brief restart downtime, atomically activates it, and rolls
+  back automatically on failure;
+- `mise run deploy:rehearse-rollback` deliberately fails after activation to
+  prove that the exact preceding release is restored and ready (successfully
+  proving rollback still returns a nonzero command result);
+- `mise run deployment:status` reports the privacy-safe transaction state and
+  next action, while `mise run recover:deployment` completes an interrupted
+  rollback;
 - `mise run verify:service` rechecks the installed service and the byte-for-byte
   read-only boundary.
 

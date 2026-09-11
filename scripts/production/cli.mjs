@@ -11,12 +11,21 @@ import {
   smokeRelease,
   verifyInstalledService,
 } from "./production.mjs";
+import {
+  deployRelease,
+  deploymentStatus,
+  recoverDeployment,
+} from "./deployment.mjs";
 
 function parseOptions(arguments_) {
   const options = {};
   for (let index = 0; index < arguments_.length; index += 1) {
     const name = arguments_[index];
-    if (name === "--managed" || name === "--allow-unready") {
+    if (
+      name === "--managed" ||
+      name === "--allow-unready" ||
+      name === "--rehearse-rollback"
+    ) {
       options[name.slice(2)] = true;
       continue;
     }
@@ -132,8 +141,53 @@ async function main() {
     return;
   }
 
+  if (command === "deploy") {
+    rejectUnknownOptions(options, ["rehearse-rollback"]);
+    let interrupted;
+    const handlers = new Map();
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      const handler = () => {
+        interrupted ??= signal;
+      };
+      handlers.set(signal, handler);
+      process.on(signal, handler);
+    }
+    try {
+      const result = await deployRelease(
+        {
+          rehearseRollback: options["rehearse-rollback"] === true,
+          isInterrupted: () => interrupted,
+        },
+        {
+          report: (event) => console.error(JSON.stringify(event)),
+        },
+      );
+      console.log(JSON.stringify(result));
+    } finally {
+      for (const [signal, handler] of handlers) {
+        process.off(signal, handler);
+      }
+    }
+    return;
+  }
+
+  if (command === "recover-deployment") {
+    rejectUnknownOptions(options, []);
+    const result = await recoverDeployment(undefined, {
+      report: (event) => console.error(JSON.stringify(event)),
+    });
+    console.log(JSON.stringify(result));
+    return;
+  }
+
+  if (command === "deployment-status") {
+    rejectUnknownOptions(options, []);
+    console.log(JSON.stringify(await deploymentStatus()));
+    return;
+  }
+
   throw new ProductionError(
-    "Usage: cli.mjs <build-release|install-service|verify-service|smoke-release> [options]",
+    "Usage: cli.mjs <build-release|install-service|verify-service|smoke-release|deploy|recover-deployment|deployment-status> [options]",
   );
 }
 
