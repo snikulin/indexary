@@ -2,7 +2,8 @@
 
 **An open-source, local-first web interface for exploring filesystem-based knowledge bases.**
 
-> Project status: architecture and product definition. Implementation has not started yet.
+> Project status: the production-shaped tracer bullet opens the Home Document through the
+> React/Fastify stack; the rest of the v1 behaviors are under active implementation.
 
 ## Overview
 
@@ -100,6 +101,19 @@ Possible later capabilities include semantic search, additional filesystem-based
 - [Development process](docs/development.md)
 - [Initial operating model](docs/operations.md)
 - [Architecture decisions](docs/adr/)
+
+## Development
+
+Install the pinned toolchain with `mise install`, then use the public task interface:
+
+- `mise run dev` starts the synthetic fixture on loopback;
+- `mise run dev:kb -- <path>` starts against one explicitly selected personal Knowledge Base;
+- `mise run test` runs unit and assembled-server integration tests;
+- `mise run build` creates the optimized same-origin application;
+- `mise run check` runs formatting, linting, types, tests, build, and browser smoke.
+
+Dependency installation is frozen by the lockfile, and every public task that can touch the
+synthetic Knowledge Base verifies that its tree remains byte-for-byte unchanged.
 
 ## License
 

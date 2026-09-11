@@ -1,0 +1,30 @@
+{
+  "name": "indexary",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25",
+    "pnpm": "12.4.0"
+  },
+  "scripts": {
+    "build:workspace": "pnpm --filter @indexary/web build && pnpm --filter @indexary/server build",
+    "check:workspace": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:workspace && pnpm build:workspace && pnpm test:browser",
+    "dev": "pnpm --filter @indexary/web build && pnpm --filter @indexary/server dev --web-root apps/web/dist",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test:browser": "playwright test",
+    "test:workspace": "pnpm --recursive --if-present test",
+    "typecheck": "pnpm --recursive --if-present typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.10.1",
+    "eslint": "10.10.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.0"
+  }
+}

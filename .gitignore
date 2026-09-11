@@ -2,3 +2,11 @@
 .agents/
 .claude/
 skills-lock.json
+
+# JavaScript workspace output and local test artifacts.
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.vite/

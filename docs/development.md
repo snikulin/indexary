@@ -4,6 +4,8 @@
 
 Linux on x86-64 is the supported development environment and eventual deployment target. Other platforms are best effort until the project deliberately expands its support contract.
 
+The browser smoke test uses the host Chromium executable at `/usr/bin/chromium`; set `CHROMIUM_PATH` to another Chromium-compatible executable when the supported Linux installation places it elsewhere. Browser binaries are a documented host prerequisite rather than an implicit dependency lifecycle download.
+
 The development environment pins Node.js, the JavaScript package manager, and project tools. JavaScript dependencies are fully locked. A small number of host prerequisites may be documented rather than isolated.
 
 `mise` manages tool versions, project environment variables, and the public task interface. Both `mise.toml` and `mise.lock` are committed, and locked installation is used whenever the toolchain is verified. Routine environment activation does not install host packages or configure host services.
@@ -15,6 +17,8 @@ Node.js 24 LTS is the initial runtime line. `pnpm` 12 is the package manager, in
 The repository is a pnpm workspace with `apps/web` and `apps/server`. Shared packages are introduced only for a concrete, named boundary; there is no generic `shared` package.
 
 Dependency lifecycle scripts are denied by default and enabled through a reviewed, committed allowlist. Dependency versions must normally have been published for at least 24 hours before installation; exceptions are explicit repository changes.
+
+The current allowlist contains only `esbuild`, whose install script selects and verifies the platform binary used by the pinned Vite, Vitest, and tsx toolchain. `strictDepBuilds` makes the frozen installation fail if another dependency introduces an unreviewed lifecycle script.
 
 ## Task interface
 

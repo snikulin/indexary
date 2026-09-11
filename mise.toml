@@ -1,0 +1,45 @@
+min_version = "2026.9.1"
+
+[tools]
+node = "24.21.0"
+pnpm = "12.4.0"
+
+[settings]
+lockfile = true
+
+[tasks._install]
+hide = true
+run = "pnpm install --frozen-lockfile"
+
+[tasks.dev]
+description = "Run Indexary against the synthetic Knowledge Base"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run dev -- --knowledge-base fixtures/knowledge-base --profile fixture --port 4173"
+
+[tasks."dev:kb"]
+description = "Run Indexary against an explicitly selected personal Knowledge Base"
+depends = ["_install"]
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -ne 1 || -z "$1" ]]; then
+  echo "Usage: mise run dev:kb -- <knowledge-base-path>" >&2
+  exit 2
+fi
+pnpm run dev -- --knowledge-base "$1" --profile personal --port 4174
+'''
+
+[tasks.test]
+description = "Run unit and integration tests"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run test:workspace"
+
+[tasks.build]
+description = "Build the optimized same-origin application"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run build:workspace"
+
+[tasks.check]
+description = "Run the complete local quality gate"
+depends = ["_install"]
+run = "node scripts/verify-fixture-read-only.mjs -- pnpm run check:workspace"
