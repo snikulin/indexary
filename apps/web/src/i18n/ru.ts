@@ -85,6 +85,8 @@ export const ru = {
   folderIntroduction: "Выберите непосредственную вложенную папку или Документ.",
   retry: "Повторить",
   openNavigation: "Открыть навигацию",
+  collapseNavigation: "Свернуть боковую панель",
+  expandNavigation: "Раскрыть боковую панель",
   openContext: "Открыть контекст",
   navigationDialog: "Навигация по Базе знаний",
   contextDialog: "Контекст выбранного Документа",

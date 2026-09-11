@@ -8,6 +8,8 @@ import {
   FileText,
   FolderClosed,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightOpen,
   Search,
   X,
@@ -177,11 +179,15 @@ function Navigation({
   selection,
   close,
   closeButtonRef,
+  collapsed = false,
+  toggleCollapsed,
   openSearch,
 }: {
   selection: AtlasSelection;
   close?: () => void;
   closeButtonRef?: RefObject<HTMLButtonElement | null>;
+  collapsed?: boolean;
+  toggleCollapsed?: () => void;
   openSearch: () => void;
 }) {
   const folderPath =
@@ -195,9 +201,12 @@ function Navigation({
   const parent = parentFolder(folderPath);
 
   return (
-    <nav className="navigation" aria-label={ru.knowledgeBase}>
+    <nav
+      className={`navigation ${collapsed ? "navigation-collapsed" : ""}`}
+      aria-label={ru.knowledgeBase}
+    >
       <div className="panel-heading">
-        <div>
+        <div hidden={collapsed}>
           <p className="eyebrow">{ru.atlas}</p>
           <h2>{ru.knowledgeBase}</h2>
         </div>
@@ -210,113 +219,130 @@ function Navigation({
           >
             <X aria-hidden="true" />
           </Button>
+        ) : toggleCollapsed ? (
+          <Button
+            className="icon-button navigation-toggle"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? ru.expandNavigation : ru.collapseNavigation}
+            title={collapsed ? ru.expandNavigation : ru.collapseNavigation}
+          >
+            {collapsed ? (
+              <PanelLeftOpen aria-hidden="true" />
+            ) : (
+              <PanelLeftClose aria-hidden="true" />
+            )}
+          </Button>
         ) : null}
       </div>
-      <button
-        className="search-field"
-        type="button"
-        aria-keyshortcuts="Control+K Meta+K"
-        onClick={() => openSearch()}
-      >
-        <Search aria-hidden="true" />
-        <span>{ru.searchPlaceholder}</span>
-      </button>
+      <div className="navigation-content" hidden={collapsed}>
+        <button
+          className="search-field"
+          type="button"
+          aria-keyshortcuts="Control+K Meta+K"
+          onClick={() => openSearch()}
+        >
+          <Search aria-hidden="true" />
+          <span>{ru.searchPlaceholder}</span>
+        </button>
 
-      <div className="tree-label">{ru.document}</div>
-      <a
-        className={`tree-item ${selection.kind === "document" && selection.root ? "active" : ""}`}
-        href="/"
-        aria-current={
-          selection.kind === "document" && selection.root ? "page" : undefined
-        }
-        onClick={close}
-      >
-        <BookOpenText aria-hidden="true" />
-        <span>{ru.home}</span>
-      </a>
-      {recent ? (
-        <a className="tree-item recent-item" href={documentRoute(recent)}>
-          <FileText aria-hidden="true" />
-          <span>{ru.lastDocument}</span>
+        <div className="tree-label">{ru.document}</div>
+        <a
+          className={`tree-item ${selection.kind === "document" && selection.root ? "active" : ""}`}
+          href="/"
+          aria-current={
+            selection.kind === "document" && selection.root ? "page" : undefined
+          }
+          onClick={close}
+        >
+          <BookOpenText aria-hidden="true" />
+          <span>{ru.home}</span>
         </a>
-      ) : null}
+        {recent ? (
+          <a className="tree-item recent-item" href={documentRoute(recent)}>
+            <FileText aria-hidden="true" />
+            <span>{ru.lastDocument}</span>
+          </a>
+        ) : null}
 
-      <div className="tree-label folders-label">{ru.folderContents}</div>
-      {folderPath !== "" ? (
-        <a className="tree-item" href={folderRoute(parent)} onClick={close}>
-          <ChevronLeft aria-hidden="true" />
-          <span>{parent === "" ? ru.rootFolder : parent}</span>
-        </a>
-      ) : null}
+        <div className="tree-label folders-label">{ru.folderContents}</div>
+        {folderPath !== "" ? (
+          <a className="tree-item" href={folderRoute(parent)} onClick={close}>
+            <ChevronLeft aria-hidden="true" />
+            <span>{parent === "" ? ru.rootFolder : parent}</span>
+          </a>
+        ) : null}
 
-      {catalogQuery.isPending ? (
-        <p className="tree-status" role="status">
-          {ru.loadingCatalog}
-        </p>
-      ) : catalogQuery.isError ? (
-        <div className="tree-status" role="status">
-          <p>
-            {isMissingRequest(catalogQuery.error)
-              ? ru.catalogUnavailable
-              : ru.catalogServerError}
+        {catalogQuery.isPending ? (
+          <p className="tree-status" role="status">
+            {ru.loadingCatalog}
           </p>
-          <Button onClick={() => void catalogQuery.refetch()}>
-            {ru.retry}
-          </Button>
-        </div>
-      ) : (
-        <>
-          <ul className="tree-list" aria-label={ru.folders}>
-            {catalogQuery.data.folders.map((folder) => (
-              <li key={folder.path}>
-                <a
-                  className={`tree-item ${selection.kind === "folder" && selection.path === folder.path ? "active" : ""}`}
-                  href={folderRoute(folder.path)}
-                  onClick={close}
-                >
-                  <FolderClosed aria-hidden="true" />
-                  <span>{folder.name}</span>
-                  <ChevronRight aria-hidden="true" />
-                </a>
-              </li>
-            ))}
-          </ul>
-          <ul className="tree-list" aria-label={ru.documents}>
-            {catalogQuery.data.documents.map((document) => {
-              const isHome = document.path === "index.md";
-              const active =
-                selection.kind === "document" &&
-                selection.path === document.path;
-              return (
-                <li key={document.path}>
+        ) : catalogQuery.isError ? (
+          <div className="tree-status" role="status">
+            <p>
+              {isMissingRequest(catalogQuery.error)
+                ? ru.catalogUnavailable
+                : ru.catalogServerError}
+            </p>
+            <Button onClick={() => void catalogQuery.refetch()}>
+              {ru.retry}
+            </Button>
+          </div>
+        ) : (
+          <>
+            <ul className="tree-list" aria-label={ru.folders}>
+              {catalogQuery.data.folders.map((folder) => (
+                <li key={folder.path}>
                   <a
-                    className={`tree-item ${active ? "active" : ""}`}
-                    href={isHome ? "/" : documentRoute(document.path)}
-                    aria-current={active ? "page" : undefined}
+                    className={`tree-item ${selection.kind === "folder" && selection.path === folder.path ? "active" : ""}`}
+                    href={folderRoute(folder.path)}
                     onClick={close}
                   >
-                    <FileText aria-hidden="true" />
-                    <span>{document.title}</span>
+                    <FolderClosed aria-hidden="true" />
+                    <span>{folder.name}</span>
+                    <ChevronRight aria-hidden="true" />
                   </a>
                 </li>
-              );
-            })}
-          </ul>
-          {catalogQuery.data.folders.length === 0 &&
-          catalogQuery.data.documents.length === 0 ? (
-            <p className="tree-status">{ru.emptyFolder}</p>
-          ) : null}
-          {catalogQuery.data.diagnostics.length > 0 ? (
-            <section
-              className="catalog-diagnostics"
-              aria-label={ru.catalogDiagnostics}
-            >
-              <AlertTriangle aria-hidden="true" />
-              <p>{ru.catalogWarnings(catalogQuery.data.diagnostics.length)}</p>
-            </section>
-          ) : null}
-        </>
-      )}
+              ))}
+            </ul>
+            <ul className="tree-list" aria-label={ru.documents}>
+              {catalogQuery.data.documents.map((document) => {
+                const isHome = document.path === "index.md";
+                const active =
+                  selection.kind === "document" &&
+                  selection.path === document.path;
+                return (
+                  <li key={document.path}>
+                    <a
+                      className={`tree-item ${active ? "active" : ""}`}
+                      href={isHome ? "/" : documentRoute(document.path)}
+                      aria-current={active ? "page" : undefined}
+                      onClick={close}
+                    >
+                      <FileText aria-hidden="true" />
+                      <span>{document.title}</span>
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+            {catalogQuery.data.folders.length === 0 &&
+            catalogQuery.data.documents.length === 0 ? (
+              <p className="tree-status">{ru.emptyFolder}</p>
+            ) : null}
+            {catalogQuery.data.diagnostics.length > 0 ? (
+              <section
+                className="catalog-diagnostics"
+                aria-label={ru.catalogDiagnostics}
+              >
+                <AlertTriangle aria-hidden="true" />
+                <p>
+                  {ru.catalogWarnings(catalogQuery.data.diagnostics.length)}
+                </p>
+              </section>
+            ) : null}
+          </>
+        )}
+      </div>
     </nav>
   );
 }
@@ -1177,6 +1203,7 @@ export function Atlas({
     navigation: false,
     context: false,
   });
+  const [navigationCollapsed, setNavigationCollapsed] = useState(false);
   const [search, setSearch] = useState<{
     open: boolean;
     tag?: string;
@@ -1275,9 +1302,18 @@ export function Atlas({
           </Button>
         </header>
 
-        <div className="atlas-grid">
+        <div
+          className={`atlas-grid ${navigationCollapsed ? "navigation-collapsed" : ""}`}
+        >
           <div className="desktop-panel">
-            <Navigation selection={selection} openSearch={openSearch} />
+            <Navigation
+              selection={selection}
+              collapsed={navigationCollapsed}
+              toggleCollapsed={() =>
+                setNavigationCollapsed((collapsed) => !collapsed)
+              }
+              openSearch={openSearch}
+            />
           </div>
           <main id="document-content" className="document-column" tabIndex={-1}>
             {selection.kind === "folder" ? (

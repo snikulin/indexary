@@ -119,6 +119,9 @@ input:focus-visible,
   grid-template-columns: minmax(230px, 18vw) minmax(0, 1fr) minmax(270px, 24vw);
   min-height: calc(100vh - 68px);
 }
+.atlas-grid.navigation-collapsed {
+  grid-template-columns: 58px minmax(0, 1fr) minmax(270px, 24vw);
+}
 .desktop-panel:first-child {
   border-right: 1px solid #d7d2c5;
 }
@@ -134,6 +137,17 @@ input:focus-visible,
 }
 .context-panel {
   background: #f7f4ed;
+}
+.navigation.navigation-collapsed {
+  overflow: hidden;
+  padding-right: 10px;
+  padding-left: 10px;
+}
+.navigation.navigation-collapsed .panel-heading {
+  justify-content: center;
+}
+.navigation-toggle {
+  flex: 0 0 auto;
 }
 .panel-heading {
   display: flex;

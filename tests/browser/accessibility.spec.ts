@@ -51,6 +51,43 @@ test("exposes the desktop Atlas landmarks, names, tabs, and visible focus", asyn
   await expectVisibleFocus(selectedTab);
 });
 
+test("lets a desktop reader collapse and restore Knowledge Base navigation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const navigation = page.getByRole("navigation", { name: "База знаний" });
+  const collapse = navigation.getByRole("button", {
+    name: "Свернуть боковую панель",
+  });
+  await expect(collapse).toBeVisible();
+  await expect(
+    navigation.getByRole("button", { name: "Поиск по Базе знаний" }),
+  ).toBeVisible();
+
+  await collapse.click();
+
+  const restore = navigation.getByRole("button", {
+    name: "Раскрыть боковую панель",
+  });
+  await expect(restore).toBeVisible();
+  await expect(
+    navigation.getByRole("button", { name: "Поиск по Базе знаний" }),
+  ).toBeHidden();
+  await expect(page.locator(".atlas-grid")).toHaveClass(/navigation-collapsed/);
+
+  await restore.click();
+
+  await expect(collapse).toBeVisible();
+  await expect(
+    navigation.getByRole("button", { name: "Поиск по Базе знаний" }),
+  ).toBeVisible();
+  await expect(page.locator(".atlas-grid")).not.toHaveClass(
+    /navigation-collapsed/,
+  );
+});
+
 test("keeps navigation and Document context available in tablet drawers", async ({
   page,
 }) => {
