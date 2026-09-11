@@ -133,6 +133,30 @@ test("retains both Atlas side areas on a narrow screen", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("restores the Atlas when a drawer crosses the desktop breakpoint", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Открыть навигацию" }).press("Enter");
+  await expect(
+    page.getByRole("dialog", { name: "Навигация по Базе знаний" }),
+  ).toBeVisible();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  await expect(
+    page.getByRole("dialog", { name: "Навигация по Базе знаний" }),
+  ).toHaveCount(0);
+  await expect(page.locator(".application-content")).not.toHaveAttribute(
+    "inert",
+    "",
+  );
+  await expect(
+    page.getByRole("navigation", { name: "База знаний" }),
+  ).toBeVisible();
+});
+
 test("operates search and context journeys from the keyboard", async ({
   page,
 }) => {
@@ -145,14 +169,17 @@ test("operates search and context journeys from the keyboard", async ({
   await tag.focus();
   await tag.press("Enter");
   const search = page.getByRole("dialog", { name: "Поиск Документов" });
-  await expect(search.getByRole("combobox")).toBeFocused();
+  await expect(search.getByRole("searchbox")).toBeFocused();
   await expect(search.getByText("Тег: проект")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(tag).toBeFocused();
 
   await page.keyboard.press("Control+k");
-  await search.getByRole("combobox").fill("Вложенный");
-  await search.getByRole("combobox").press("Enter");
+  await search.getByRole("searchbox").fill("Вложенный");
+  await expect(search.getByText(/Результат 1 из 1:/)).toContainText(
+    "Проект Альфа",
+  );
+  await search.getByRole("searchbox").press("Enter");
   await expect(
     page.getByRole("heading", { name: "Проект Альфа", level: 1 }),
   ).toBeVisible();

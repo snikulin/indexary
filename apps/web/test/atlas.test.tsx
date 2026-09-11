@@ -360,9 +360,17 @@ describe("Atlas", () => {
     const input = within(dialog).getByPlaceholderText("Поиск по Базе знаний");
     fireEvent.change(input, { target: { value: "onerror" } });
 
-    expect(
-      await within(dialog).findByRole("link", { name: /Безопасный результат/ }),
-    ).toHaveAttribute("href", documentRoute("Опасный.md"));
+    const result = await within(dialog).findByRole("link", {
+      name: /Безопасный результат/,
+    });
+    expect(result).toHaveAttribute("href", documentRoute("Опасный.md"));
+    expect(within(dialog).getByRole("searchbox")).toHaveAttribute(
+      "aria-describedby",
+      expect.stringMatching(/\S/),
+    );
+    expect(within(dialog).getByText(/Результат 1 из 1:/)).toHaveTextContent(
+      "Безопасный результат",
+    );
     expect(within(dialog).getByText("onerror").tagName).toBe("MARK");
     expect(within(dialog).getByText(/<img src=x/)).toBeInTheDocument();
     expect(dialog.querySelector("img")).toBeNull();
@@ -516,7 +524,7 @@ describe("Atlas", () => {
     tag.focus();
     fireEvent.click(tag);
     const dialog = screen.getByRole("dialog", { name: "Поиск Документов" });
-    expect(within(dialog).getByRole("combobox")).toHaveFocus();
+    expect(within(dialog).getByRole("searchbox")).toHaveFocus();
     fireEvent.keyDown(document, { key: "Escape" });
     expect(dialog).not.toBeInTheDocument();
     expect(tag).toHaveFocus();

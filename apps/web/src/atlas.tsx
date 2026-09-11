@@ -319,6 +319,7 @@ function SearchDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsId = useId();
   const limitationsId = useId();
+  const activeResultId = useId();
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState(initialTag);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -331,6 +332,7 @@ function SearchDialog({
     retry: false,
   });
   const results = searchQuery.data?.results ?? [];
+  const activeResult = results[activeIndex];
 
   useModalFocus(dialogRef, inputRef, returnFocusRef, close);
 
@@ -390,14 +392,13 @@ function SearchDialog({
             type="search"
             placeholder={ru.searchPlaceholder}
             value={query}
-            role="combobox"
-            aria-autocomplete="list"
+            role="searchbox"
             aria-controls={resultsId}
-            aria-expanded={hasCriteria && results.length > 0}
+            aria-describedby={`${limitationsId} ${activeResultId}`}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleKeyDown}
           />
-          <kbd>⌘/Ctrl K</kbd>
+          <kbd>{ru.searchShortcut}</kbd>
         </label>
         {tag === undefined ? null : (
           <div className="active-tag-filter">
@@ -476,6 +477,15 @@ function SearchDialog({
             </>
           )}
         </div>
+        <p id={activeResultId} className="sr-only" aria-live="polite">
+          {activeResult
+            ? ru.activeSearchResult(
+                activeIndex + 1,
+                results.length,
+                activeResult.title,
+              )
+            : ""}
+        </p>
         <p id={limitationsId} className="search-limitations">
           {ru.searchLimitations}
         </p>
@@ -665,12 +675,12 @@ function formatMaterialSize(size: number | null): string {
     return ru.unknownSize;
   }
   if (size < 1024) {
-    return `${size} Б`;
+    return ru.bytes(size);
   }
   if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} КБ`;
+    return ru.kilobytes((size / 1024).toFixed(1));
   }
-  return `${(size / (1024 * 1024)).toFixed(1)} МБ`;
+  return ru.megabytes((size / (1024 * 1024)).toFixed(1));
 }
 
 function MaterialPanel({
@@ -1193,6 +1203,20 @@ export function Atlas({
     document.addEventListener("keydown", handleShortcut);
     return () => document.removeEventListener("keydown", handleShortcut);
   }, [openSearch]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const desktop = window.matchMedia("(min-width: 1101px)");
+    const handleDesktop = (event: MediaQueryListEvent) => {
+      if (event.matches) {
+        closeDrawers();
+      }
+    };
+    desktop.addEventListener("change", handleDesktop);
+    return () => desktop.removeEventListener("change", handleDesktop);
+  }, [closeDrawers]);
 
   const drawerOpen = drawers.navigation || drawers.context;
   const backgroundHidden = drawerOpen || search.open;

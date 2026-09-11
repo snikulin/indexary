@@ -5,6 +5,7 @@ export const ru = {
   knowledgeBase: "База знаний",
   searchPlaceholder: "Поиск по Базе знаний",
   search: "Поиск Документов",
+  searchShortcut: "⌘/Ctrl K",
   closeSearch: "Закрыть поиск",
   searchPrompt:
     "Введите точное слово, фразу в кавычках или префикс со звёздочкой.",
@@ -13,6 +14,8 @@ export const ru = {
   searchEmpty: "Документы по этому запросу не найдены.",
   searchCount: (count: number) =>
     `Найдено Документов: ${count}. Показаны все результаты.`,
+  activeSearchResult: (index: number, count: number, title: string) =>
+    `Результат ${index} из ${count}: ${title}`,
   tagFilter: (tag: string) => `Тег: ${tag}`,
   clearTagFilter: "Убрать фильтр по тегу",
   searchLimitations:
@@ -48,6 +51,9 @@ export const ru = {
     "Материал недоступен из-за небезопасного или неверного пути.",
   materialType: "Тип",
   materialSize: "Размер",
+  bytes: (size: number) => `${size} Б`,
+  kilobytes: (size: string) => `${size} КБ`,
+  megabytes: (size: string) => `${size} МБ`,
   unknownSize: "Неизвестен",
   openMaterial: "Открыть материал",
   pdfPreview: "Предпросмотр PDF",
