@@ -1,0 +1,4 @@
+# Repository-local AI tooling is personal, generated state.
+.agents/
+.claude/
+skills-lock.json
