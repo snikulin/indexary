@@ -44,13 +44,30 @@ Tests verify that Indexary leaves the fixture Knowledge Base byte-for-byte uncha
 
 Fixture development and development against a personal Knowledge Base may run simultaneously. They use different ports and cache namespaces so their derived indexes cannot collide.
 
-The derived catalog and full-text search database is rebuilt from the filesystem under
-`$XDG_CACHE_HOME/indexary/catalog-v2/<profile>/<knowledge-base-id>` (or the
-platform cache fallback when `XDG_CACHE_HOME` is unset). The profile and a
-non-reversible identifier derived from the canonical Knowledge Base path form
-the namespace; no Indexary-owned database is created inside the Knowledge Base.
-`INDEXARY_CACHE_ROOT` or `--cache-root` may select an alternate cache root for
-isolated tests and diagnostics.
+The derived catalog and full-text search database is stored under
+`$XDG_CACHE_HOME/indexary/catalog-v4/<profile>/<knowledge-base-id>` (or the
+platform cache fallback when `XDG_CACHE_HOME` is unset). The format version,
+profile, and a non-reversible identifier derived from the canonical Knowledge
+Base path form the index identity; no Indexary-owned database or absolute
+Knowledge Base path is stored inside the Knowledge Base or routine health
+output. `INDEXARY_CACHE_ROOT` or `--cache-root` may select an alternate cache
+root for isolated tests and diagnostics.
+
+Compatible indexes are opened and reconciled against the filesystem before the
+instance becomes ready. Invalid indexes and reconciliation results are built as
+separate candidates, validated, and atomically selected. A first build remains
+live but not ready, and readiness reports only an aggregate degraded count.
+
+`mise run perf:index` generates a non-personal workload of 10,000 Documents and
+10,000,000,000 bytes of sparse Source Material, then checks the 30-second cold
+index, 200-millisecond representative search, event-loop delay, and read-only
+targets. It is intentionally outside the routine quality gate.
+
+The recorded 2026-09-11 run on the supported Linux x86-64 environment (Node
+24.21.0, Intel Core i9-13900H) completed cold indexing in 6.81 seconds, with a
+17.35 millisecond slowest representative search and 59.38 millisecond maximum
+observed event-loop delay. Those measurements keep index work in-process behind
+the Knowledge Base module boundary.
 
 ## Change flow
 

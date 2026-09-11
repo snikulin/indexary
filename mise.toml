@@ -39,6 +39,11 @@ description = "Build the optimized same-origin application"
 depends = ["_install"]
 run = "node scripts/verify-fixture-read-only.mjs -- pnpm run build:workspace"
 
+[tasks."perf:index"]
+description = "Measure the generated v1 index and search support target"
+depends = ["_install"]
+run = "pnpm --filter @indexary/server build && node scripts/benchmark-index.mjs"
+
 [tasks.check]
 description = "Run the complete local quality gate"
 depends = ["_install"]

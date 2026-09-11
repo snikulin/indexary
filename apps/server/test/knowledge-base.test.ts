@@ -1,7 +1,9 @@
 import {
   mkdir,
   mkdtemp,
+  readFile,
   readdir,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -55,7 +57,10 @@ describe("Knowledge Base", () => {
     await knowledgeBase.initialize();
     const document = await knowledgeBase.openHomeDocument();
 
-    expect(knowledgeBase.status()).toEqual({ state: "ready" });
+    expect(knowledgeBase.status()).toEqual({
+      state: "ready",
+      degradedCount: 3,
+    });
     expect(document).toMatchObject({
       path: "index.md",
       title: "Добро пожаловать в Индексари",
@@ -229,12 +234,12 @@ describe("Knowledge Base", () => {
     expect(fixtureCatalog).toBeDefined();
     expect(personalCatalog).toBeDefined();
     expect(fixtureCatalog).not.toBe(personalCatalog);
-    expect(fixtureCatalog).toContain(`catalog-v3${path.sep}fixture`);
+    expect(fixtureCatalog).toContain(`catalog-v4${path.sep}fixture`);
     const database = new DatabaseSync(path.join(cacheRoot, fixtureCatalog!), {
       readOnly: true,
     });
     expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 3,
+      user_version: 4,
     });
     expect(
       database
@@ -247,7 +252,32 @@ describe("Knowledge Base", () => {
       { name: "document_search" },
       { name: "document_tags" },
     ]);
+    const identity = Object.fromEntries(
+      (
+        database
+          .prepare(
+            "SELECT key, value FROM catalog_metadata WHERE key IN ('knowledge-base-id', 'profile', 'schema-version')",
+          )
+          .all() as Array<{ key: string; value: string }>
+      ).map((row) => [row.key, row.value]),
+    );
+    expect(identity).toMatchObject({
+      profile: "fixture",
+      "schema-version": "4",
+      "knowledge-base-id": expect.stringMatching(/^[a-f0-9]{24}$/),
+    });
+    expect(JSON.stringify(identity)).not.toContain(root);
     database.close();
+    const initialRevision = (await fixtureProfile.openHomeDocument())?.revision;
+    await Promise.all([fixtureProfile.close(), personalProfile.close()]);
+
+    const reused = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "fixture",
+    });
+    await reused.initialize();
+    expect((await reused.openHomeDocument())?.revision).toBe(initialRevision);
+    await reused.close();
 
     await writeFile(path.join(root, "Новый.md"), "# Новый\n");
     const rebuilt = createKnowledgeBase(root, {
@@ -259,6 +289,105 @@ describe("Knowledge Base", () => {
       path: "Новый.md",
       title: "Новый",
     });
+    await rebuilt.close();
+  });
+
+  test("recovers corrupt and incompatible indexes through validated atomic candidates", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-recovery-"));
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
+    temporaryDirectories.push(root, cacheRoot);
+    await writeFile(
+      path.join(root, "index.md"),
+      "# Главная\n\nВосстановлено.\n",
+    );
+    const before = await captureTree(root);
+
+    const first = createKnowledgeBase(root, { cacheRoot, profile: "recovery" });
+    await first.initialize();
+    await first.close();
+    const catalogRelative = (await readdir(cacheRoot, { recursive: true }))
+      .map(String)
+      .find((entry) => entry.endsWith("catalog.sqlite"));
+    expect(catalogRelative).toBeDefined();
+    const catalogFile = path.join(cacheRoot, catalogRelative!);
+
+    await writeFile(catalogFile, "not a sqlite database");
+    const corruptRecovery = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "recovery",
+    });
+    await corruptRecovery.initialize();
+    expect(await corruptRecovery.openHomeDocument()).toMatchObject({
+      title: "Главная",
+    });
+    await corruptRecovery.close();
+
+    const incompatible = new DatabaseSync(catalogFile);
+    incompatible.exec("PRAGMA user_version = 999");
+    incompatible.close();
+    const incompatibleRecovery = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "recovery",
+    });
+    await incompatibleRecovery.initialize();
+    expect(incompatibleRecovery.status()).toMatchObject({ state: "ready" });
+    expect(
+      (await readdir(path.dirname(catalogFile))).filter((entry) =>
+        entry.startsWith(".catalog-candidate-"),
+      ),
+    ).toEqual([]);
+    await incompatibleRecovery.close();
+    expect(await captureTree(root)).toEqual(before);
+  });
+
+  test("removes abandoned candidates and preserves a usable index after failed startup", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-interrupt-"));
+    const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
+    temporaryDirectories.push(root, cacheRoot);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    const before = await captureTree(root);
+
+    const first = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "interrupt",
+    });
+    await first.initialize();
+    await first.close();
+    const catalogRelative = (await readdir(cacheRoot, { recursive: true }))
+      .map(String)
+      .find((entry) => entry.endsWith("catalog.sqlite"));
+    expect(catalogRelative).toBeDefined();
+    const catalogFile = path.join(cacheRoot, catalogRelative!);
+    const abandoned = path.join(
+      path.dirname(catalogFile),
+      ".catalog-candidate-interrupted.sqlite",
+    );
+    await writeFile(abandoned, "partial");
+
+    const recovered = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "interrupt",
+    });
+    await recovered.initialize();
+    expect(await recovered.openHomeDocument()).toMatchObject({
+      title: "Главная",
+    });
+    await expect(readFile(abandoned)).rejects.toMatchObject({ code: "ENOENT" });
+    await recovered.close();
+    const catalogBeforeFailure = await readFile(catalogFile);
+
+    const unavailableRoot = `${root}-temporarily-unavailable`;
+    await rename(root, unavailableRoot);
+    const failed = createKnowledgeBase(root, {
+      cacheRoot,
+      profile: "interrupt",
+    });
+    await failed.initialize();
+    expect(failed.status()).toEqual({ state: "home-document-unavailable" });
+    expect(await readFile(catalogFile)).toEqual(catalogBeforeFailure);
+    await failed.close();
+    await rename(unavailableRoot, root);
+    expect(await captureTree(root)).toEqual(before);
   });
 
   test("derives outgoing links and safe backlinks from the rendered interpretation", async () => {

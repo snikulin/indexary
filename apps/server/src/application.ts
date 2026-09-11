@@ -19,7 +19,11 @@ const LiveResponse = Type.Object(
   { additionalProperties: false },
 );
 const ReadyResponse = Type.Object(
-  { status: Type.Literal("ready"), homeDocument: Type.Literal("available") },
+  {
+    status: Type.Literal("ready"),
+    homeDocument: Type.Literal("available"),
+    degradedCount: Type.Integer({ minimum: 0 }),
+  },
   { additionalProperties: false },
 );
 const NotReadyResponse = Type.Object(
@@ -547,7 +551,11 @@ export async function buildApplication(
     async (_request, reply) => {
       const status = knowledgeBase.status();
       if (status.state === "ready") {
-        return { status: "ready" as const, homeDocument: "available" as const };
+        return {
+          status: "ready" as const,
+          homeDocument: "available" as const,
+          degradedCount: status.degradedCount,
+        };
       }
       return reply
         .status(503)
@@ -589,6 +597,6 @@ export async function buildApplication(
     }
   }
 
-  await knowledgeBase.initialize();
+  void knowledgeBase.initialize().catch(() => undefined);
   return app;
 }

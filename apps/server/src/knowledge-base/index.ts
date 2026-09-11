@@ -25,7 +25,7 @@ import {
 import { createWikilinkResolver } from "./links.js";
 
 const HOME_DOCUMENT_PATH = "index.md";
-const CATALOG_VERSION = 3;
+const CATALOG_VERSION = 4;
 const WATCH_DEBOUNCE_MS = 120;
 const WATCH_MAX_WAIT_MS = 800;
 const CHANGE_HISTORY_LIMIT = 512;
@@ -34,11 +34,14 @@ const SNIPPET_END = "\u{E001}";
 
 export type KnowledgeBaseStatus =
   | { state: "initializing" }
-  | { state: "ready" }
+  | { state: "ready"; degradedCount: number }
   | { state: "home-document-unavailable" };
 
 export type CatalogDiagnosticCode =
-  "SYMLINK_CYCLIC" | "SYMLINK_EXTERNAL" | "SYMLINK_UNAVAILABLE";
+  | "CONTENT_UNAVAILABLE"
+  | "SYMLINK_CYCLIC"
+  | "SYMLINK_EXTERNAL"
+  | "SYMLINK_UNAVAILABLE";
 
 export interface CatalogDiagnostic {
   code: CatalogDiagnosticCode;
@@ -292,6 +295,7 @@ function snippetParts(value: string): SearchSnippetPart[] {
 }
 
 const diagnosticMessages: Record<CatalogDiagnosticCode, string> = {
+  CONTENT_UNAVAILABLE: "Недоступное содержимое пропущено.",
   SYMLINK_CYCLIC: "Циклическая символическая ссылка пропущена.",
   SYMLINK_EXTERNAL: "Символическая ссылка за пределы Базы знаний пропущена.",
   SYMLINK_UNAVAILABLE: "Недоступная символическая ссылка пропущена.",
@@ -557,7 +561,17 @@ async function discoverKnowledgeBase(
     absoluteDirectory: string,
     relativeDirectory: string,
   ): Promise<void> {
-    const entries = await readdir(absoluteDirectory, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await readdir(absoluteDirectory, { withFileTypes: true });
+    } catch {
+      addDiagnostic(
+        diagnostics,
+        "CONTENT_UNAVAILABLE",
+        relativeDirectory || ".",
+      );
+      return;
+    }
     entries.sort((left, right) => left.name.localeCompare(right.name, "en"));
 
     for (const entry of entries) {
@@ -697,16 +711,32 @@ function defaultCacheRoot(): string {
     : path.resolve(configured);
 }
 
-function namespaceFor(canonicalRoot: string, profile: string): string {
-  const knowledgeBaseId = createHash("sha256")
-    .update(canonicalRoot)
-    .digest("hex")
-    .slice(0, 24);
+interface CatalogIdentity {
+  formatVersion: number;
+  knowledgeBaseId: string;
+  profile: string;
+}
+
+function catalogIdentity(
+  canonicalRoot: string,
+  profile: string,
+): CatalogIdentity {
+  return {
+    formatVersion: CATALOG_VERSION,
+    knowledgeBaseId: createHash("sha256")
+      .update(canonicalRoot)
+      .digest("hex")
+      .slice(0, 24),
+    profile,
+  };
+}
+
+function namespaceFor(identity: CatalogIdentity): string {
   return path.join(
     "indexary",
-    `catalog-v${CATALOG_VERSION}`,
-    profile,
-    knowledgeBaseId,
+    `catalog-v${identity.formatVersion}`,
+    identity.profile,
+    identity.knowledgeBaseId,
   );
 }
 
@@ -735,43 +765,119 @@ async function catalogLocation(
   canonicalRoot: string,
   cacheRoot: string,
   profile: string,
-): Promise<{ catalogFile: string; namespace: string }> {
+): Promise<{
+  catalogFile: string;
+  namespace: string;
+  identity: CatalogIdentity;
+}> {
   const canonicalCacheRoot = await canonicalizeProspectivePath(cacheRoot);
-  const namespace = path.join(
-    canonicalCacheRoot,
-    namespaceFor(canonicalRoot, profile),
-  );
+  const identity = catalogIdentity(canonicalRoot, profile);
+  const namespace = path.join(canonicalCacheRoot, namespaceFor(identity));
   if (isInsideRoot(canonicalRoot, namespace)) {
     throw new Error(
       "The Indexary cache must remain outside the Knowledge Base.",
     );
   }
-  return { namespace, catalogFile: path.join(namespace, "catalog.sqlite") };
+  return {
+    namespace,
+    catalogFile: path.join(namespace, "catalog.sqlite"),
+    identity,
+  };
 }
 
-async function storedRevision(
-  canonicalRoot: string,
-  cacheRoot: string,
-  profile: string,
-): Promise<number> {
-  const { catalogFile } = await catalogLocation(
-    canonicalRoot,
-    cacheRoot,
-    profile,
-  );
+function catalogMetadata(
+  database: DatabaseSync,
+  key: string,
+): string | undefined {
+  const row = database
+    .prepare("SELECT value FROM catalog_metadata WHERE key = ?")
+    .get(key) as SqliteRow | undefined;
+  return row === undefined ? undefined : String(row.value);
+}
+
+function validateCatalog(
+  database: DatabaseSync,
+  identity: CatalogIdentity,
+): void {
+  const integrity = database.prepare("PRAGMA quick_check").get() as
+    SqliteRow | undefined;
+  if (integrity?.quick_check !== "ok") {
+    throw new Error("The derived index failed its integrity check.");
+  }
+  const version = database.prepare("PRAGMA user_version").get() as
+    SqliteRow | undefined;
+  if (
+    Number(version?.user_version) !== identity.formatVersion ||
+    catalogMetadata(database, "schema-version") !==
+      String(identity.formatVersion) ||
+    catalogMetadata(database, "knowledge-base-id") !==
+      identity.knowledgeBaseId ||
+    catalogMetadata(database, "profile") !== identity.profile
+  ) {
+    throw new Error("The derived index is incompatible with this runtime.");
+  }
+  database
+    .prepare(
+      `SELECT documents.path
+       FROM documents
+       JOIN document_search
+         ON document_search.document_path = documents.path
+       LIMIT 1`,
+    )
+    .get();
+}
+
+function openCatalog(
+  catalogFile: string,
+  identity: CatalogIdentity,
+): DatabaseSync {
+  const database = new DatabaseSync(catalogFile);
   try {
-    const database = new DatabaseSync(catalogFile, { readOnly: true });
-    try {
-      const row = database
-        .prepare("SELECT value FROM catalog_metadata WHERE key = 'revision'")
-        .get() as SqliteRow | undefined;
-      const revision = Number(row?.value ?? 0);
-      return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
-    } finally {
-      database.close();
+    validateCatalog(database, identity);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+function validStoredRevision(database: DatabaseSync): number {
+  const revision = Number(catalogMetadata(database, "revision") ?? 0);
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
+}
+
+function catalogDegradedCount(database: DatabaseSync): number {
+  const stored = Number(catalogMetadata(database, "degraded-count"));
+  return Number.isSafeInteger(stored) && stored >= 0 ? stored : 0;
+}
+
+async function removeAbandonedCandidates(namespace: string): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(namespace);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
     }
+    throw error;
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => entry.startsWith(".catalog-candidate-"))
+      .map((entry) => rm(path.join(namespace, entry), { force: true })),
+  );
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(directory, "r");
+    await handle.sync();
   } catch {
-    return 0;
+    // The supported Linux target permits directory fsync. Other filesystems may
+    // reject it; the already-closed SQLite candidate remains safe to rename.
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -782,7 +888,7 @@ async function buildCatalog(
   revision: number,
 ): Promise<string> {
   const discovery = await discoverKnowledgeBase(canonicalRoot);
-  const { catalogFile, namespace } = await catalogLocation(
+  const { catalogFile, namespace, identity } = await catalogLocation(
     canonicalRoot,
     cacheRoot,
     profile,
@@ -790,7 +896,7 @@ async function buildCatalog(
   await mkdir(namespace, { recursive: true });
   const temporaryFile = path.join(
     namespace,
-    `.catalog-${process.pid}-${randomUUID()}.sqlite`,
+    `.catalog-candidate-${process.pid}-${randomUUID()}.sqlite`,
   );
 
   let database: DatabaseSync | undefined;
@@ -913,6 +1019,7 @@ async function buildCatalog(
       discovery.documents.map((document) => document.path),
     );
     const interpretedDocuments: DocumentRepresentation[] = [];
+    let degradedCount = discovery.diagnostics.length;
     database.exec("BEGIN IMMEDIATE");
     for (const folder of discovery.folders) {
       insertFolder.run(folder.path, folder.parentPath ?? null, folder.name);
@@ -941,6 +1048,7 @@ async function buildCatalog(
         JSON.stringify(document),
       );
       interpretedDocuments.push(document);
+      degradedCount += document.diagnostics.length;
       const sourceMaterials = await Promise.all(
         document.sourceMaterials.map((reference, position) =>
           inspectMaterial(
@@ -977,6 +1085,9 @@ async function buildCatalog(
         ...sourceMaterials,
         ...attachments,
       ].entries()) {
+        if (material.diagnostic !== undefined) {
+          degradedCount += 1;
+        }
         insertMaterial.run(
           document.path,
           material.id,
@@ -1037,10 +1148,22 @@ async function buildCatalog(
     database
       .prepare("INSERT INTO catalog_metadata(key, value) VALUES (?, ?)")
       .run("revision", String(revision));
+    database
+      .prepare("INSERT INTO catalog_metadata(key, value) VALUES (?, ?)")
+      .run("knowledge-base-id", identity.knowledgeBaseId);
+    database
+      .prepare("INSERT INTO catalog_metadata(key, value) VALUES (?, ?)")
+      .run("profile", identity.profile);
+    database
+      .prepare("INSERT INTO catalog_metadata(key, value) VALUES (?, ?)")
+      .run("degraded-count", String(degradedCount));
     database.exec("COMMIT");
     database.close();
     database = undefined;
+    const verified = openCatalog(temporaryFile, identity);
+    verified.close();
     await rename(temporaryFile, catalogFile);
+    await syncDirectory(namespace);
     return catalogFile;
   } catch (error) {
     try {
@@ -1053,19 +1176,14 @@ async function buildCatalog(
 }
 
 function queryCatalog<T>(
-  catalogFile: string,
+  database: DatabaseSync,
   query: (database: DatabaseSync) => T,
 ): T {
-  const database = new DatabaseSync(catalogFile, { readOnly: true });
-  try {
-    return query(database);
-  } finally {
-    database.close();
-  }
+  return query(database);
 }
 
-function snapshotCatalog(catalogFile: string): CatalogSnapshot {
-  return queryCatalog(catalogFile, (database) => {
+function snapshotCatalog(database: DatabaseSync): CatalogSnapshot {
+  return queryCatalog(database, (database) => {
     const folders = database
       .prepare("SELECT path, parent_path, name FROM folders ORDER BY path")
       .all() as unknown as SqliteRow[];
@@ -1142,8 +1260,7 @@ function snapshotCatalog(catalogFile: string): CatalogSnapshot {
   });
 }
 
-function updateCatalogRevision(catalogFile: string, revision: number): void {
-  const database = new DatabaseSync(catalogFile);
+function updateCatalogRevision(database: DatabaseSync, revision: number): void {
   try {
     database.exec("BEGIN IMMEDIATE");
     database
@@ -1153,8 +1270,6 @@ function updateCatalogRevision(catalogFile: string, revision: number): void {
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
-  } finally {
-    database.close();
   }
 }
 
@@ -1204,6 +1319,8 @@ export function createKnowledgeBase(
   let currentStatus: KnowledgeBaseStatus = { state: "initializing" };
   let initialization: Promise<void> | undefined;
   let catalogFile: string | undefined;
+  let catalogIdentityValue: CatalogIdentity | undefined;
+  let database: DatabaseSync | undefined;
   let canonicalKnowledgeBaseRoot: string | undefined;
   let cacheRoot: string | undefined;
   let profile: string | undefined;
@@ -1212,8 +1329,10 @@ export function createKnowledgeBase(
   let firstPendingChangeAt: number | undefined;
   let reconcilePromise: Promise<void> | undefined;
   let reconcileAgain = false;
+  let startupDirty = false;
   let closed = false;
   let currentRevision = 0;
+  const observedDocumentPaths = new Set<string>();
   const listeners = new Set<(change: KnowledgeBaseChange) => void>();
   const changeHistory: KnowledgeBaseChange[] = [];
 
@@ -1231,8 +1350,63 @@ export function createKnowledgeBase(
     }
   }
 
-  function updateStatus(file: string): void {
-    const home = queryCatalog(file, (database) =>
+  function observeFilesystemChange(filename: string | Buffer | null): void {
+    if (filename !== null) {
+      const observedPath = toCatalogPath(String(filename));
+      if (
+        observedPath !== "" &&
+        !hasHiddenSegment(observedPath) &&
+        observedPath.toLowerCase().endsWith(".md")
+      ) {
+        observedDocumentPaths.add(observedPath);
+      }
+    }
+    queueReconcile();
+  }
+
+  function publishStartupChanges(): void {
+    const activeDatabase = database;
+    if (activeDatabase === undefined || observedDocumentPaths.size === 0) {
+      return;
+    }
+    const alreadyPublished = new Set(
+      changeHistory
+        .filter((change) => change.path !== undefined)
+        .map((change) => change.path),
+    );
+    const changes: Array<Omit<KnowledgeBaseChange, "revision">> = [];
+    if (!changeHistory.some((change) => change.type === "catalog-changed")) {
+      changes.push({ type: "catalog-changed" });
+    }
+    for (const documentPath of [...observedDocumentPaths].sort((left, right) =>
+      left.localeCompare(right, "en"),
+    )) {
+      if (alreadyPublished.has(documentPath)) {
+        continue;
+      }
+      const exists = activeDatabase
+        .prepare("SELECT 1 FROM documents WHERE path = ?")
+        .get(documentPath);
+      changes.push({
+        type: exists === undefined ? "document-removed" : "document-changed",
+        path: documentPath,
+      });
+    }
+    const revisionedChanges = changes.map((change) => {
+      currentRevision += 1;
+      return { ...change, revision: currentRevision };
+    });
+    if (revisionedChanges.length > 0) {
+      updateCatalogRevision(activeDatabase, currentRevision);
+    }
+    for (const change of revisionedChanges) {
+      publish(change);
+    }
+    observedDocumentPaths.clear();
+  }
+
+  function updateStatus(activeDatabase: DatabaseSync): void {
+    const home = queryCatalog(activeDatabase, (database) =>
       database
         .prepare("SELECT path FROM documents WHERE path = ?")
         .get(HOME_DOCUMENT_PATH),
@@ -1240,17 +1414,24 @@ export function createKnowledgeBase(
     currentStatus =
       home === undefined
         ? { state: "home-document-unavailable" }
-        : { state: "ready" };
+        : {
+            state: "ready",
+            degradedCount: catalogDegradedCount(activeDatabase),
+          };
   }
 
-  async function reconcile(): Promise<void> {
+  async function reconcile(updateReadiness = true): Promise<void> {
     const file = catalogFile;
+    const activeDatabase = database;
+    const identity = catalogIdentityValue;
     const canonicalRoot = canonicalKnowledgeBaseRoot;
     const resolvedCacheRoot = cacheRoot;
     const selectedProfile = profile;
     if (
       closed ||
       file === undefined ||
+      activeDatabase === undefined ||
+      identity === undefined ||
       canonicalRoot === undefined ||
       resolvedCacheRoot === undefined ||
       selectedProfile === undefined
@@ -1258,14 +1439,19 @@ export function createKnowledgeBase(
       return;
     }
 
-    const previous = snapshotCatalog(file);
+    const observedPaths = new Set(observedDocumentPaths);
+    for (const observedPath of observedPaths) {
+      observedDocumentPaths.delete(observedPath);
+    }
+    const previous = snapshotCatalog(activeDatabase);
     const rebuiltFile = await buildCatalog(
       canonicalRoot,
       resolvedCacheRoot,
       selectedProfile,
       currentRevision,
     );
-    const next = snapshotCatalog(rebuiltFile);
+    const nextDatabase = openCatalog(rebuiltFile, identity);
+    const next = snapshotCatalog(nextDatabase);
     const changes: Array<Omit<KnowledgeBaseChange, "revision">> = [];
     if (previous.catalog !== next.catalog) {
       changes.push({ type: "catalog-changed" });
@@ -1280,16 +1466,32 @@ export function createKnowledgeBase(
         changes.push({ type: "document-removed", path: documentPath });
       }
     }
+    const changedPaths = new Set(changes.map((change) => change.path));
+    for (const observedPath of observedPaths) {
+      if (changedPaths.has(observedPath)) {
+        continue;
+      }
+      changes.push({
+        type: next.documents.has(observedPath)
+          ? "document-changed"
+          : "document-removed",
+        path: observedPath,
+      });
+    }
 
     const revisionedChanges = changes.map((change) => {
       currentRevision += 1;
       return { ...change, revision: currentRevision };
     });
     if (revisionedChanges.length > 0) {
-      updateCatalogRevision(rebuiltFile, currentRevision);
+      updateCatalogRevision(nextDatabase, currentRevision);
     }
     catalogFile = rebuiltFile;
-    updateStatus(rebuiltFile);
+    database = nextDatabase;
+    activeDatabase.close();
+    if (updateReadiness) {
+      updateStatus(nextDatabase);
+    }
     for (const change of revisionedChanges) {
       publish(change);
     }
@@ -1297,6 +1499,10 @@ export function createKnowledgeBase(
 
   function queueReconcile(): void {
     if (closed) {
+      return;
+    }
+    if (currentStatus.state === "initializing") {
+      startupDirty = true;
       return;
     }
     if (reconcilePromise !== undefined) {
@@ -1334,6 +1540,15 @@ export function createKnowledgeBase(
 
   async function load(): Promise<void> {
     try {
+      try {
+        watcher ??= watch(
+          path.resolve(configuredRoot),
+          { recursive: true },
+          (_eventType, filename) => observeFilesystemChange(filename),
+        );
+      } catch {
+        // Invalid roots are reported through readiness after canonicalization.
+      }
       const canonicalRoot = await realpath(configuredRoot);
       const rootMetadata = await stat(canonicalRoot);
       if (!rootMetadata.isDirectory()) {
@@ -1346,16 +1561,47 @@ export function createKnowledgeBase(
         throw new Error("The cache profile is invalid.");
       }
       cacheRoot = path.resolve(options.cacheRoot ?? defaultCacheRoot());
-      currentRevision =
-        (await storedRevision(canonicalRoot, cacheRoot, profile)) + 1;
-      catalogFile = await buildCatalog(
+      const location = await catalogLocation(canonicalRoot, cacheRoot, profile);
+      catalogFile = location.catalogFile;
+      catalogIdentityValue = location.identity;
+      await mkdir(location.namespace, { recursive: true });
+      await removeAbandonedCandidates(location.namespace);
+      try {
+        await stat(catalogFile);
+        database = openCatalog(catalogFile, location.identity);
+        currentRevision = validStoredRevision(database);
+      } catch {
+        database = undefined;
+        currentRevision = 0;
+      }
+      if (closed) {
+        return;
+      }
+      watcher ??= watch(
         canonicalRoot,
-        cacheRoot,
-        profile,
-        currentRevision,
+        { recursive: true },
+        (_eventType, filename) => observeFilesystemChange(filename),
       );
-      updateStatus(catalogFile);
-      watcher = watch(canonicalRoot, { recursive: true }, queueReconcile);
+      do {
+        startupDirty = false;
+        if (database === undefined) {
+          currentRevision = Math.max(1, currentRevision);
+          const builtFile = await buildCatalog(
+            canonicalRoot,
+            cacheRoot,
+            profile,
+            currentRevision,
+          );
+          database = openCatalog(builtFile, location.identity);
+          catalogFile = builtFile;
+        } else {
+          await reconcile(false);
+        }
+      } while (startupDirty && !closed);
+      if (database !== undefined) {
+        publishStartupChanges();
+        updateStatus(database);
+      }
     } catch (error) {
       currentStatus = { state: "home-document-unavailable" };
       if (error instanceof KnowledgeBaseStartupError) {
@@ -1364,9 +1610,9 @@ export function createKnowledgeBase(
     }
   }
 
-  async function initializedCatalog(): Promise<string | undefined> {
+  async function initializedCatalog(): Promise<DatabaseSync | undefined> {
     await (initialization ?? (initialization = load()));
-    return catalogFile;
+    return database;
   }
 
   return {
@@ -1381,7 +1627,11 @@ export function createKnowledgeBase(
         clearTimeout(debounceTimer);
         debounceTimer = undefined;
       }
+      await initialization?.catch(() => undefined);
+      watcher?.close();
       await reconcilePromise;
+      database?.close();
+      database = undefined;
       listeners.clear();
     },
     status() {

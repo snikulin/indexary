@@ -14,6 +14,10 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { buildApplication, parseByteRange } from "../src/application.js";
 import type { RuntimeConfig } from "../src/config.js";
+import type {
+  KnowledgeBase,
+  KnowledgeBaseStatus,
+} from "../src/knowledge-base/index.js";
 import { captureTree } from "./helpers.js";
 
 const fixtureRoot = path.resolve(
@@ -64,10 +68,15 @@ async function observeServerEvents(
   lastEventId?: number,
 ): Promise<{
   events: ObservedServerEvent[];
+  closed: Promise<void>;
   close: () => void;
 }> {
   const events: ObservedServerEvent[] = [];
   let request: ClientRequest | undefined;
+  let markClosed: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => {
+    markClosed = resolve;
+  });
   await new Promise<void>((resolve, reject) => {
     request = httpGet(
       url,
@@ -112,11 +121,12 @@ async function observeServerEvents(
           resolve();
         });
         response.on("error", reject);
+        response.once("close", () => markClosed?.());
       },
     );
     request.on("error", reject);
   });
-  return { events, close: () => request?.destroy() };
+  return { events, closed, close: () => request?.destroy() };
 }
 
 beforeEach(async () => {
@@ -162,6 +172,7 @@ describe("assembled Fastify application", () => {
     expect(ready.json()).toEqual({
       status: "ready",
       homeDocument: "available",
+      degradedCount: 3,
     });
     await app.close();
     expect(await captureTree(fixtureRoot)).toEqual(before);
@@ -186,8 +197,71 @@ describe("assembled Fastify application", () => {
       diagnostics: [{ code: "FRONTMATTER_INVALID" }],
     });
     expect(home.json().html).toContain("Текст остаётся доступен");
-    expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
+    const ready = await app.inject("/api/health/ready");
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toMatchObject({
+      status: "ready",
+      degradedCount: expect.any(Number),
+    });
+    expect(ready.body).not.toContain(root);
+    expect(ready.body).not.toContain("index.md");
     await app.close();
+  });
+
+  test("serves liveness while the first complete index is still initializing", async () => {
+    let finishInitialization: (() => void) | undefined;
+    const initializationGate = new Promise<void>((resolve) => {
+      finishInitialization = resolve;
+    });
+    let status: KnowledgeBaseStatus = { state: "initializing" };
+    let closeCalls = 0;
+    const knowledgeBase: KnowledgeBase = {
+      async initialize() {
+        await initializationGate;
+        status = { state: "ready", degradedCount: 0 };
+      },
+      async close() {
+        closeCalls += 1;
+      },
+      status: () => status,
+      subscribeChanges: () => () => undefined,
+      browseFolder: async () => undefined,
+      openDocument: async () => undefined,
+      openHomeDocument: async () => undefined,
+      openMaterial: async () => undefined,
+      searchDocuments: async () => [],
+    };
+
+    const app = await buildApplication(config(fixtureRoot), { knowledgeBase });
+    expect((await app.inject("/api/health/live")).json()).toEqual({
+      status: "live",
+    });
+    const notReady = await app.inject("/api/health/ready");
+    expect(notReady.statusCode).toBe(503);
+    expect(notReady.json()).toEqual({
+      status: "not-ready",
+      reason: "initializing",
+    });
+
+    finishInitialization?.();
+    await eventually(async () => {
+      expect((await app.inject("/api/health/ready")).json()).toEqual({
+        status: "ready",
+        homeDocument: "available",
+        degradedCount: 0,
+      });
+    });
+    await app.close();
+    expect(closeCalls).toBe(1);
+  });
+
+  test("ends active event streams during graceful application shutdown", async () => {
+    const app = await buildApplication(config(fixtureRoot));
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const stream = await observeServerEvents(`${address}/api/events`);
+
+    await app.close();
+    await expect(stream.closed).resolves.toBeUndefined();
   });
 
   test("keeps liveness up and reports a clear non-fatal missing Home Document", async () => {

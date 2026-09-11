@@ -14,6 +14,13 @@ Each Knowledge Base and runtime profile has an independent cache namespace so fi
 
 An index namespace includes its format version. Compatible application builds reuse an existing index; a build that changes the format creates a new namespace rather than migrating the preceding one in place. Obsolete namespaces are disposable and may be removed after the current build has successfully created and opened its index.
 
+At startup Indexary validates the selected index identity and SQLite integrity,
+then reconciles it with the filesystem before reporting readiness. A corrupt or
+incompatible index is replaced only after a separate candidate has been fully
+built and successfully opened. Abandoned candidates are removed on the next
+startup; they are never authoritative. Isolated content failures increase the
+path-free degraded count while usable Documents remain available.
+
 ## Logging
 
 Operational logs may identify a problematic document by its path relative to the Knowledge Base and may describe the error type. They do not include document contents, frontmatter values, or the absolute Knowledge Base root by default.
