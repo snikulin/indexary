@@ -258,6 +258,10 @@ tailscale serve --bg --yes http://127.0.0.1:4176
 tailscale serve status
 ```
 
+Run both commands on the machine that hosts the Indexary service and Knowledge
+Base. Serve configuration is node-local: running `tailscale serve status` on a
+client device reports that client's unrelated routes, not the Indexary route.
+
 Use Tailscale Serve, never Funnel. Tailnet policy must restrict the node and
 application to the owner; Indexary continues to bind only to loopback and adds
 no application authentication. Because every release keeps the same loopback
