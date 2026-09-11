@@ -96,4 +96,4 @@ Possible later capabilities include semantic search, additional filesystem-based
 
 ## License
 
-A license will be selected before the first implementation release.
+Indexary is licensed under the [GNU General Public License v3.0](LICENSE).
