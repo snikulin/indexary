@@ -102,7 +102,7 @@ $XDG_DATA_HOME/indexary/
 $XDG_CONFIG_HOME/indexary/environment
 $XDG_CONFIG_HOME/systemd/user/indexary.service
 $XDG_STATE_HOME/indexary/installation.json
-$XDG_CACHE_HOME/indexary/catalog-v4/...
+$XDG_CACHE_HOME/indexary/catalog-v5/...
 ```
 
 Release data and the atomic `current` selector live under the data home.

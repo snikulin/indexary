@@ -18,26 +18,32 @@ describe("wikilink resolution", () => {
 
     expect(resolve("Раздел/Источник.md", "Цель")).toEqual({
       state: "resolved",
+      targetKind: "document",
       path: "Раздел/Цель.md",
     });
     expect(resolve("Раздел/Источник.md", "/Цель")).toEqual({
       state: "resolved",
+      targetKind: "document",
       path: "Цель.md",
     });
     expect(resolve("Раздел/Источник.md", "Единственная")).toEqual({
       state: "resolved",
+      targetKind: "document",
       path: "Глубже/Единственная.md",
     });
     expect(resolve("Раздел/Источник.md", "../Цель.md#раздел")).toEqual({
       state: "resolved",
+      targetKind: "document",
       path: "Цель.md",
     });
     expect(resolve("Раздел/Источник.md", "RFC:123")).toEqual({
       state: "resolved",
+      targetKind: "document",
       path: "Раздел/RFC:123.md",
     });
     expect(resolve("Раздел/Источник.md", "C:\\private")).toEqual({
       state: "resolved",
+      targetKind: "document",
       path: "Раздел/C:\\private.md",
     });
   });
@@ -56,6 +62,49 @@ describe("wikilink resolution", () => {
 
     expect(forward("Источник.md", "Дубль")).toEqual({ state: "ambiguous" });
     expect(reverse("Источник.md", "Дубль")).toEqual({ state: "ambiguous" });
+  });
+
+  test("resolves existing non-Markdown wikilinks without guessing ambiguity", () => {
+    const resolve = createWikilinkResolver(
+      ["Раздел/Источник.md"],
+      ["materials/example.pdf", "а/duplicate.pdf", "б/duplicate.pdf"],
+    );
+
+    expect(resolve("Раздел/Источник.md", "../materials/example.pdf")).toEqual({
+      state: "resolved",
+      targetKind: "material",
+      path: "materials/example.pdf",
+    });
+    expect(resolve("Раздел/Источник.md", "/materials/example.pdf")).toEqual({
+      state: "resolved",
+      targetKind: "material",
+      path: "materials/example.pdf",
+    });
+    expect(resolve("Раздел/Источник.md", "duplicate.pdf")).toEqual({
+      state: "ambiguous",
+    });
+    expect(resolve("Раздел/Источник.md", "missing.pdf")).toEqual({
+      state: "missing",
+    });
+  });
+
+  test("rejects an external URI even when its normalized spelling exists locally", () => {
+    const resolve = createWikilinkResolver(
+      ["Раздел/Источник.md"],
+      ["Раздел/https:/outside.example/private.pdf"],
+    );
+
+    expect(
+      resolve("Раздел/Источник.md", "https://outside.example/private.pdf"),
+    ).toEqual({ state: "missing" });
+  });
+
+  test("rejects a protocol-relative wikilink before filename fallback", () => {
+    const resolve = createWikilinkResolver(["index.md"], ["files/private.pdf"]);
+
+    expect(resolve("index.md", "//evil.example/private.pdf")).toEqual({
+      state: "missing",
+    });
   });
 
   test("encodes a Linux backslash filename as data in a Document route", () => {

@@ -161,6 +161,28 @@ test("previews and switches referenced materials in the Document context", async
   ).toBeVisible();
 });
 
+test("opens a SHA-bound PDF from its wikilink", async ({ page }) => {
+  await page.goto(
+    "/documents/%D0%9F%D1%83%D1%82%D0%B5%D0%B2%D0%BE%D0%B4%D0%B8%D1%82%D0%B5%D0%BB%D1%8C.md",
+  );
+  const link = page
+    .locator(".document-body")
+    .getByRole("link", { name: "Оригинал PDF" });
+  await expect(link).toHaveAttribute(
+    "href",
+    "/api/materials?document=%D0%9F%D1%83%D1%82%D0%B5%D0%B2%D0%BE%D0%B4%D0%B8%D1%82%D0%B5%D0%BB%D1%8C.md&id=source-material-0",
+  );
+  await expect(
+    page.locator(".document-body").getByText("Оригинал PDF — не найдено"),
+  ).toHaveCount(0);
+
+  const href = await link.getAttribute("href");
+  expect(href).not.toBeNull();
+  const materialResponse = await page.request.get(href ?? "");
+  expect(materialResponse.status()).toBe(200);
+  expect(materialResponse.headers()["content-type"]).toBe("application/pdf");
+});
+
 test("follows a wikilink and its backlink with browser history", async ({
   page,
 }) => {

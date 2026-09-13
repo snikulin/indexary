@@ -25,7 +25,7 @@ import {
 import { createWikilinkResolver } from "./links.js";
 
 const HOME_DOCUMENT_PATH = "index.md";
-const CATALOG_VERSION = 4;
+const CATALOG_VERSION = 5;
 const WATCH_DEBOUNCE_MS = 120;
 const WATCH_MAX_WAIT_MS = 800;
 const CHANGE_HISTORY_LIMIT = 512;
@@ -195,6 +195,7 @@ interface DiscoveredDocument {
 interface Discovery {
   folders: DiscoveredFolder[];
   documents: DiscoveredDocument[];
+  materialPaths: string[];
   diagnostics: CatalogDiagnostic[];
   sourceFingerprint: string;
 }
@@ -552,6 +553,7 @@ async function discoverKnowledgeBase(
     { path: "", name: folderName(""), parentPath: undefined },
   ];
   const documents: DiscoveredDocument[] = [];
+  const materialPaths: string[] = [];
   const diagnostics: CatalogDiagnostic[] = [];
   const sourceState = createHash("sha256");
   const canonicalFolders = new Set([canonicalRoot]);
@@ -635,7 +637,11 @@ async function discoverKnowledgeBase(
         continue;
       }
 
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!entry.name.toLowerCase().endsWith(".md")) {
+        materialPaths.push(toCatalogPath(relativePath));
         continue;
       }
       let canonicalDocument: string;
@@ -701,25 +707,29 @@ async function discoverKnowledgeBase(
       continue;
     }
 
-    if (
-      metadata.isFile() &&
-      link.relativePath.toLowerCase().endsWith(".md") &&
-      !canonicalDocuments.has(canonicalTarget)
-    ) {
-      canonicalDocuments.add(canonicalTarget);
-      documents.push({
-        path: toCatalogPath(link.relativePath),
-        canonicalPath: canonicalTarget,
-      });
+    if (metadata.isFile()) {
+      if (link.relativePath.toLowerCase().endsWith(".md")) {
+        if (!canonicalDocuments.has(canonicalTarget)) {
+          canonicalDocuments.add(canonicalTarget);
+          documents.push({
+            path: toCatalogPath(link.relativePath),
+            canonicalPath: canonicalTarget,
+          });
+        }
+      } else {
+        materialPaths.push(toCatalogPath(link.relativePath));
+      }
     }
   }
 
   folders.sort((left, right) => left.path.localeCompare(right.path, "en"));
   documents.sort((left, right) => left.path.localeCompare(right.path, "en"));
+  materialPaths.sort((left, right) => left.localeCompare(right, "en"));
   diagnostics.sort((left, right) => left.path.localeCompare(right.path, "en"));
   return {
     folders,
     documents,
+    materialPaths,
     diagnostics,
     sourceFingerprint: sourceState.digest("hex"),
   };
@@ -1096,6 +1106,7 @@ async function buildCatalog(
     );
     const resolveWikilink = createWikilinkResolver(
       discovery.documents.map((document) => document.path),
+      discovery.materialPaths,
     );
     const interpretedDocuments: DocumentRepresentation[] = [];
     let degradedCount = discovery.diagnostics.length;
@@ -1153,12 +1164,7 @@ async function buildCatalog(
         )
       ).filter(
         (attachment) =>
-          !sourceMaterials.some(
-            (source) =>
-              (source.resolvedPath !== undefined &&
-                source.resolvedPath === attachment.resolvedPath) ||
-              source.path === attachment.path,
-          ),
+          !sourceMaterials.some((source) => source.path === attachment.path),
       );
       for (const [position, material] of [
         ...sourceMaterials,

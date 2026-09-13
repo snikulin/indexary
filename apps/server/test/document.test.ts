@@ -120,6 +120,73 @@ published: true
     expect(JSON.stringify(document.diagnostics)).not.toContain("старый.pdf");
   });
 
+  test("accepts mixed legacy and SHA-bound Source Material entries", async () => {
+    const document = await interpretDocument(
+      "index.md",
+      `---
+originals:
+  - materials/legacy.pdf
+  - path: materials/bound.pdf
+    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  - materials/legacy.pdf
+---
+`,
+    );
+
+    expect(document.sourceMaterials).toEqual([
+      "materials/legacy.pdf",
+      "materials/bound.pdf",
+    ]);
+    expect(document.diagnostics.map(({ code }) => code)).not.toContain(
+      "ORIGINALS_INVALID",
+    );
+    expect(document.sourceMaterials.join(" ")).not.toContain(
+      "0123456789abcdef",
+    );
+  });
+
+  test.each([
+    ["missing sha256", "  - path: materials/example.pdf"],
+    [
+      "missing path",
+      "  - sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    [
+      "empty path",
+      '  - path: ""\n    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    ],
+    [
+      "invalid sha256",
+      "  - path: materials/example.pdf\n    sha256: not-a-sha256",
+    ],
+    [
+      "absolute path",
+      "  - path: /etc/passwd\n    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    [
+      "traversal",
+      "  - path: ../private.pdf\n    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    [
+      "nested path",
+      "  - path:\n      nested: materials/example.pdf\n    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    [
+      "extra field",
+      "  - path: materials/example.pdf\n    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n    url: https://example.com/private.pdf",
+    ],
+  ])("rejects a malformed SHA-bound Source Material: %s", async (_, entry) => {
+    const document = await interpretDocument(
+      "index.md",
+      `---\noriginals:\n${entry}\n---\n`,
+    );
+
+    expect(document.sourceMaterials).toEqual([]);
+    expect(document.diagnostics.map(({ code }) => code)).toContain(
+      "ORIGINALS_INVALID",
+    );
+  });
+
   test("isolates malformed YAML without hiding safely readable text", async () => {
     const document = await interpretDocument(
       "ошибка.md",

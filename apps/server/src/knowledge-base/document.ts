@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import rehypeSanitize, {
   defaultSchema,
   type Options as SanitizeOptions,
@@ -11,6 +13,7 @@ import { parseDocument } from "yaml";
 
 import {
   documentRoute,
+  materialRoute,
   type ResolveWikilink,
   type WikilinkState,
 } from "./links.js";
@@ -91,6 +94,7 @@ interface MarkdownNode {
   data?: {
     hName?: string;
     hProperties?: Record<string, unknown>;
+    materialPath?: string;
   };
 }
 
@@ -260,24 +264,72 @@ function readableValue(
   return undefined;
 }
 
-function parseStringList(
+function parseTags(
   value: unknown,
   diagnostics: DocumentDiagnostic[],
-  code: "TAGS_INVALID" | "ORIGINALS_INVALID",
 ): string[] {
   const values = typeof value === "string" ? [value] : value;
   if (!Array.isArray(values)) {
-    addDiagnostic(diagnostics, code);
+    addDiagnostic(diagnostics, "TAGS_INVALID");
     return [];
   }
 
   const normalized: string[] = [];
   for (const item of values) {
     if (typeof item !== "string" || item.trim() === "") {
-      addDiagnostic(diagnostics, code);
+      addDiagnostic(diagnostics, "TAGS_INVALID");
       continue;
     }
     const text = item.trim();
+    if (!normalized.includes(text)) {
+      normalized.push(text);
+    }
+  }
+  return normalized;
+}
+
+function parseOriginals(
+  value: unknown,
+  diagnostics: DocumentDiagnostic[],
+): string[] {
+  const values = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(values)) {
+    addDiagnostic(diagnostics, "ORIGINALS_INVALID");
+    return [];
+  }
+
+  const normalized: string[] = [];
+  for (const item of values) {
+    let candidate: unknown = item;
+    let shaBound = false;
+    if (item instanceof Map) {
+      const pathValue = item.get("path");
+      const sha256 = item.get("sha256");
+      if (
+        item.size !== 2 ||
+        typeof sha256 !== "string" ||
+        !/^[a-f\d]{64}$/i.test(sha256)
+      ) {
+        addDiagnostic(diagnostics, "ORIGINALS_INVALID");
+        continue;
+      }
+      candidate = pathValue;
+      shaBound = true;
+    }
+    if (typeof candidate !== "string" || candidate.trim() === "") {
+      addDiagnostic(diagnostics, "ORIGINALS_INVALID");
+      continue;
+    }
+    const text = candidate.trim();
+    if (
+      shaBound &&
+      (text.includes("\0") ||
+        path.posix.isAbsolute(text) ||
+        text.split("/").includes(".."))
+    ) {
+      addDiagnostic(diagnostics, "ORIGINALS_INVALID");
+      continue;
+    }
     if (!normalized.includes(text)) {
       normalized.push(text);
     }
@@ -340,6 +392,43 @@ function collectAttachmentPaths(node: MarkdownNode): string[] {
 
   visit(node);
   return paths;
+}
+
+function routeMaterialWikilinks(
+  node: MarkdownNode,
+  documentPath: string,
+  sourceMaterials: readonly string[],
+  attachmentPaths: readonly string[],
+): void {
+  const sourcePaths = sourceMaterials.map((reference) => {
+    if (
+      reference.includes("\0") ||
+      path.posix.isAbsolute(reference) ||
+      reference.split("/").includes("..")
+    ) {
+      return undefined;
+    }
+    return path.posix.normalize(reference);
+  });
+
+  function visit(current: MarkdownNode): void {
+    const materialPath = current.data?.materialPath;
+    if (materialPath !== undefined) {
+      const sourcePosition = sourcePaths.indexOf(materialPath);
+      const attachmentPosition = attachmentPaths.indexOf(current.url ?? "");
+      const materialId =
+        sourcePosition === -1
+          ? `attachment-${attachmentPosition}`
+          : `source-material-${sourcePosition}`;
+      current.url = materialRoute(documentPath, materialId);
+      delete current.data?.materialPath;
+    }
+    for (const child of current.children ?? []) {
+      visit(child);
+    }
+  }
+
+  visit(node);
 }
 
 export function isSafeDocumentUrl(value: string): boolean {
@@ -464,16 +553,35 @@ function interpretWikilinks(
         const resolution = resolveWikilink?.(documentPath, target) ?? {
           state: "missing" as const,
         };
-        const link: OutgoingLink = {
-          target,
-          label,
-          state: resolution.state,
-          ...(resolution.path === undefined ? {} : { path: resolution.path }),
-          snippet: safeSnippet(snippetSource || child.value, match[0]),
-        };
-        links.push(link);
-
-        if (resolution.state === "resolved" && resolution.path !== undefined) {
+        if (
+          resolution.state === "resolved" &&
+          resolution.path !== undefined &&
+          resolution.targetKind === "material"
+        ) {
+          const reference = path.posix.relative(
+            path.posix.dirname(documentPath),
+            resolution.path,
+          );
+          replacements.push({
+            type: "link",
+            url: reference,
+            data: {
+              hProperties: { className: ["wikilink", "wikilink-resolved"] },
+              materialPath: resolution.path,
+            },
+            children: [makeText(label)],
+          });
+        } else if (
+          resolution.state === "resolved" &&
+          resolution.path !== undefined
+        ) {
+          links.push({
+            target,
+            label,
+            state: resolution.state,
+            path: resolution.path,
+            snippet: safeSnippet(snippetSource || child.value, match[0]),
+          });
           replacements.push({
             type: "link",
             url: documentRoute(resolution.path),
@@ -483,6 +591,12 @@ function interpretWikilinks(
             children: [makeText(label)],
           });
         } else {
+          links.push({
+            target,
+            label,
+            state: resolution.state,
+            snippet: safeSnippet(snippetSource || child.value, match[0]),
+          });
           addDiagnostic(
             diagnostics,
             resolution.state === "ambiguous"
@@ -602,14 +716,10 @@ export async function interpretDocumentForIndex<DocumentPath extends string>(
   title ??= filenameTitle(documentPath);
 
   const tags = metadata.has("tags")
-    ? parseStringList(metadata.get("tags"), diagnostics, "TAGS_INVALID")
+    ? parseTags(metadata.get("tags"), diagnostics)
     : [];
   const sourceMaterials = metadata.has("originals")
-    ? parseStringList(
-        metadata.get("originals"),
-        diagnostics,
-        "ORIGINALS_INVALID",
-      )
+    ? parseOriginals(metadata.get("originals"), diagnostics)
     : [];
   if (metadata.has("original_path")) {
     const legacyPath = metadata.get("original_path");
@@ -640,6 +750,7 @@ export async function interpretDocumentForIndex<DocumentPath extends string>(
   );
   const bodyText = textContent(tree);
   const attachmentPaths = collectAttachmentPaths(tree);
+  routeMaterialWikilinks(tree, documentPath, sourceMaterials, attachmentPaths);
   secureMarkdown(tree, diagnostics);
   const renderer = unified()
     .use(remarkRehype)

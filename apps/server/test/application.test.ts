@@ -553,6 +553,143 @@ original_path: materials/legacy.eml
     await app.close();
   });
 
+  test("serves a SHA-bound Source Material through its PDF wikilink", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-pdf-wikilink-"),
+    );
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, "materials"));
+    await writeFile(path.join(root, "materials", "example.pdf"), "PDF-source");
+    await writeFile(
+      path.join(root, "index.md"),
+      `---
+originals:
+  - path: materials/example.pdf
+    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+---
+# Карточка
+
+[[materials/example.pdf|Оригинал PDF]]
+`,
+    );
+    const before = await captureTree(root);
+    const app = await buildApplication(config(root));
+    await app.ready();
+
+    const response = await app.inject("/api/documents/home");
+    expect(response.statusCode).toBe(200);
+    const document = response.json();
+    expect(
+      document.diagnostics.map(({ code }: { code: string }) => code),
+    ).toEqual([]);
+    expect(document.html).toContain(
+      'href="/api/materials?document=index.md&#x26;id=source-material-0"',
+    );
+    expect(document.html).toContain(">Оригинал PDF</a>");
+    expect(document.html).not.toContain("0123456789abcdef");
+    expect(document.materials.sourceMaterials).toMatchObject([
+      {
+        id: "source-material-0",
+        path: "materials/example.pdf",
+        status: "available",
+      },
+    ]);
+    expect(document.materials.attachments).toEqual([]);
+
+    const material = await app.inject(
+      "/api/materials?document=index.md&id=source-material-0",
+    );
+    expect(material.statusCode).toBe(200);
+    expect(material.headers["content-type"]).toBe("application/pdf");
+    expect(material.body).toBe("PDF-source");
+    expect(await captureTree(root)).toEqual(before);
+    await app.close();
+  });
+
+  test("serves an existing non-Markdown wikilink as an Attachment", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-attachment-wikilink-"),
+    );
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, "Раздел"));
+    await mkdir(path.join(root, "files"));
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    await writeFile(path.join(root, "files", "example.pdf"), "PDF-attachment");
+    await writeFile(
+      path.join(root, "Раздел", "Карточка.md"),
+      "# Карточка\n\n[[../files/example.pdf|Приложение PDF]]\n",
+    );
+    const before = await captureTree(root);
+    const app = await buildApplication(config(root));
+    await app.ready();
+
+    const response = await app.inject({
+      url: "/api/documents",
+      query: { path: "Раздел/Карточка.md" },
+    });
+    expect(response.statusCode).toBe(200);
+    const document = response.json();
+    expect(document.diagnostics).toEqual([]);
+    expect(document.outgoingLinks).toEqual([]);
+    expect(document.html).toContain(
+      "document=%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%2F%D0%9A%D0%B0%D1%80%D1%82%D0%BE%D1%87%D0%BA%D0%B0.md&#x26;id=attachment-0",
+    );
+    expect(document.materials.attachments).toMatchObject([
+      {
+        id: "attachment-0",
+        path: "files/example.pdf",
+        status: "available",
+      },
+    ]);
+
+    const material = await app.inject({
+      url: "/api/materials",
+      query: { document: "Раздел/Карточка.md", id: "attachment-0" },
+    });
+    expect(material.statusCode).toBe(200);
+    expect(material.headers["content-type"]).toBe("application/pdf");
+    expect(material.body).toBe("PDF-attachment");
+    expect(await captureTree(root)).toEqual(before);
+    await app.close();
+  });
+
+  test("keeps a wikilink to an in-root Source Material alias downloadable", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-material-alias-"),
+    );
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, "materials"));
+    await mkdir(path.join(root, "aliases"));
+    await writeFile(path.join(root, "materials", "source.pdf"), "PDF-source");
+    await symlink(
+      path.join(root, "materials", "source.pdf"),
+      path.join(root, "aliases", "source.pdf"),
+    );
+    await writeFile(
+      path.join(root, "index.md"),
+      `---
+originals: [materials/source.pdf]
+---
+[[aliases/source.pdf|PDF alias]]
+`,
+    );
+    const before = await captureTree(root);
+    const app = await buildApplication(config(root));
+    await app.ready();
+
+    const document = (await app.inject("/api/documents/home")).json();
+    expect(document.materials.attachments).toMatchObject([
+      { id: "attachment-0", path: "aliases/source.pdf", status: "available" },
+    ]);
+    expect(document.html).toContain("id=attachment-0");
+    expect(
+      (await app.inject("/api/materials?document=index.md&id=attachment-0"))
+        .statusCode,
+    ).toBe(200);
+    expect(await captureTree(root)).toEqual(before);
+    await app.close();
+  });
+
   test("serves full and partial material bytes with safe headers", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "indexary-ranges-"));
     temporaryDirectories.push(root);

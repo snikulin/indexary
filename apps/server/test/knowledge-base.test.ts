@@ -343,13 +343,13 @@ describe("Knowledge Base", () => {
     expect(fixtureCatalog).toBeDefined();
     expect(personalCatalog).toBeDefined();
     expect(fixtureCatalog).not.toBe(personalCatalog);
-    expect(fixtureCatalog).toContain(`catalog-v4${path.sep}fixture`);
+    expect(fixtureCatalog).toContain(`catalog-v5${path.sep}fixture`);
     const catalogFile = path.join(cacheRoot, fixtureCatalog!);
     const database = new DatabaseSync(catalogFile, {
       readOnly: true,
     });
     expect(database.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 4,
+      user_version: 5,
     });
     expect(
       database
@@ -373,7 +373,7 @@ describe("Knowledge Base", () => {
     );
     expect(identity).toMatchObject({
       profile: "fixture",
-      "schema-version": "4",
+      "schema-version": "5",
       "knowledge-base-id": expect.stringMatching(/^[a-f0-9]{24}$/),
     });
     expect(JSON.stringify(identity)).not.toContain(root);

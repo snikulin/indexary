@@ -104,7 +104,7 @@ not share a catalog even when profiles are accidentally reused across different
 roots.
 
 The derived catalog and full-text search database is stored under
-`$XDG_CACHE_HOME/indexary/catalog-v4/<profile>/<knowledge-base-id>` (or the
+`$XDG_CACHE_HOME/indexary/catalog-v5/<profile>/<knowledge-base-id>` (or the
 platform cache fallback when `XDG_CACHE_HOME` is unset). The format version,
 profile, and a non-reversible identifier derived from the canonical Knowledge
 Base path form the index identity; no Indexary-owned database or absolute
