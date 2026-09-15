@@ -388,9 +388,23 @@ input:focus-visible,
   font-family: Georgia, serif;
 }
 .document-body a {
-  color: #8d4c2b;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 3px;
+  border-radius: 3px;
+  color: #74371f;
+  font-weight: 600;
+  text-decoration-color: #c46639;
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    text-decoration-color 140ms ease;
+}
+.document-body a:hover,
+.document-body a:focus-visible {
+  background: #f3e4d4;
+  color: #5c2b18;
+  text-decoration-color: currentColor;
 }
 .document-body .wikilink-missing,
 .document-body .wikilink-ambiguous {

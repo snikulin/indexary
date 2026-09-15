@@ -288,6 +288,28 @@ test("follows navigation, wikilinks, and backlinks by keyboard", async ({
   ).toBeVisible();
 });
 
+test("distinguishes Document links without relying on color alone", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const link = page
+    .locator(".document-body")
+    .getByRole("link", { name: "Путеводитель" });
+  const restingStyle = await link.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      fontWeight: Number.parseInt(style.fontWeight, 10),
+      textDecorationLine: style.textDecorationLine,
+      textDecorationThickness: Number.parseFloat(style.textDecorationThickness),
+    };
+  });
+
+  expect(restingStyle.fontWeight).toBeGreaterThanOrEqual(600);
+  expect(restingStyle.textDecorationLine).toContain("underline");
+  expect(restingStyle.textDecorationThickness).toBeGreaterThanOrEqual(2);
+});
+
 test("announces distinct missing and server-error states in Russian", async ({
   page,
 }) => {
