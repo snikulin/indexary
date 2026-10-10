@@ -1,36 +1,30 @@
-# Issue tracker: GitHub
+# Issue tracker: Local Markdown
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues and specs for this repo live as markdown files in `.scratch/`.
 
 ## Conventions
 
-- Create an issue with `gh issue create`.
-- Read an issue and its discussion with `gh issue view <number> --comments`.
-- List and filter issues with `gh issue list`.
-- Comment with `gh issue comment <number>`.
-- Apply or remove labels with `gh issue edit`.
-- Close an issue with `gh issue close`.
+- One feature per directory: `.scratch/<feature-slug>/`
+- The spec is `.scratch/<feature-slug>/spec.md`
+- Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`, never a single combined tickets file
+- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
+- Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
-Infer the repository from the current checkout and its `origin` remote.
+## When a skill says "publish to the issue tracker"
 
-## Pull requests as a triage surface
+Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
 
-**PRs as a request surface: no.**
+## When a skill says "fetch the relevant ticket"
 
-GitHub shares one number space across issues and pull requests. Resolve an
-ambiguous reference by trying `gh pr view <number>` and then
-`gh issue view <number>`.
+Read the file at the referenced path. The user will normally pass the path or the issue number directly.
 
-## Skill operations
+## Wayfinding operations
 
-When a skill says “publish to the issue tracker”, create a GitHub issue.
+Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
 
-When a skill says “fetch the relevant ticket”, read the complete issue body,
-labels, and comments.
-
-Publish tickets in dependency order. Represent blocking relationships using
-GitHub native issue dependencies when available. Otherwise, add a
-`Blocked by: #<number>` line to the issue body.
-
-A ticket is ready for work when all its blockers are closed and it has no
-assignee.
+- **Map**: `.scratch/<effort>/map.md` (the Notes / Decisions-so-far / Fog body).
+- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
+- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
+- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
+- **Claim**: set `Status: claimed` and save before any work.
+- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
