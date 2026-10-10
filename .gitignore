@@ -3,6 +3,14 @@
 .claude/
 skills-lock.json
 
+# OpenClaw agent artifacts and task inputs in this checkout (personal, generated).
+/.openclaw/
+/memory/
+/media/inbound/openclaw-staged-*/
+
+# Local-markdown issue tracker and specs (personal, generated).
+/.scratch/
+
 # JavaScript workspace output and local test artifacts.
 node_modules/
 dist/
