@@ -186,6 +186,7 @@ input:focus-visible,
 }
 .search-field svg {
   width: 16px;
+  flex: 0 0 auto;
 }
 .search-field span {
   font-size: 13px;
@@ -211,6 +212,7 @@ input:focus-visible,
 .tree-item svg {
   width: 17px;
   height: 17px;
+  flex: 0 0 auto;
 }
 .tree-item svg:last-child {
   margin-left: auto;
@@ -307,6 +309,7 @@ input:focus-visible,
 }
 .folder-entries a svg {
   width: 19px;
+  flex: 0 0 auto;
 }
 .folder-entries a svg:last-child {
   margin-left: auto;
@@ -712,6 +715,7 @@ input:focus-visible,
 }
 .material-open svg {
   width: 16px;
+  flex: 0 0 auto;
 }
 .material-diagnostic {
   padding: 10px;

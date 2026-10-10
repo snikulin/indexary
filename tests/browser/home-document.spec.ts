@@ -31,6 +31,39 @@ test("opens the Home Document through the production origin", async ({
   await expect(page).toHaveURL("http://127.0.0.1:4199/");
 });
 
+test("keeps navigation document icons 17px regardless of title length", async ({
+  page,
+}) => {
+  const longTitle =
+    "Квитанции ТСЖ «Коломенская усадьба» за май 2026 — лицевой счёт 42122";
+  const longPath = path.join(fixtureRoot, `${longTitle}.md`);
+
+  try {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await writeFile(longPath, `# ${longTitle}\n`);
+    await page.goto("/");
+
+    const documents = page
+      .getByRole("navigation", { name: "База знаний" })
+      .getByRole("list", { name: "Документы" });
+    await expect(documents.getByRole("link", { name: longTitle })).toBeVisible({
+      timeout: 2_000,
+    });
+
+    const sizes = await documents
+      .locator("a.tree-item > svg")
+      .evaluateAll((icons) =>
+        icons.map((icon) => icon.getBoundingClientRect().width),
+      );
+    expect(sizes.length).toBeGreaterThan(1);
+    for (const width of sizes) {
+      expect(width).toBeCloseTo(17, 1);
+    }
+  } finally {
+    await rm(longPath, { force: true });
+  }
+});
+
 test("browses nested Cyrillic paths with direct routes and browser history", async ({
   page,
 }) => {
