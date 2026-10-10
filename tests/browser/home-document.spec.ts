@@ -36,31 +36,41 @@ test("keeps navigation document icons 17px regardless of title length", async ({
 }) => {
   const longTitle =
     "Квитанции ТСЖ «Коломенская усадьба» за май 2026 — лицевой счёт 42122";
-  const longPath = path.join(fixtureRoot, `${longTitle}.md`);
+  await page.route("**/api/catalog*", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        path: "",
+        name: "База знаний",
+        folders: [],
+        documents: [
+          { path: "index.md", title: "Домашний документ" },
+          { path: "Квитанции.md", title: longTitle },
+        ],
+        diagnostics: [],
+      }),
+    }),
+  );
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto("/");
 
-  try {
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await writeFile(longPath, `# ${longTitle}\n`);
-    await page.goto("/");
+  const documents = page
+    .getByRole("navigation", { name: "База знаний" })
+    .getByRole("list", { name: "Документы" });
+  await expect(documents.getByRole("link", { name: longTitle })).toBeVisible();
 
-    const documents = page
-      .getByRole("navigation", { name: "База знаний" })
-      .getByRole("list", { name: "Документы" });
-    await expect(documents.getByRole("link", { name: longTitle })).toBeVisible({
-      timeout: 2_000,
-    });
-
-    const sizes = await documents
-      .locator("a.tree-item > svg")
-      .evaluateAll((icons) =>
-        icons.map((icon) => icon.getBoundingClientRect().width),
-      );
-    expect(sizes.length).toBeGreaterThan(1);
-    for (const width of sizes) {
-      expect(width).toBeCloseTo(17, 1);
-    }
-  } finally {
-    await rm(longPath, { force: true });
+  const sizes = await documents
+    .locator("a.tree-item > svg")
+    .evaluateAll((icons) =>
+      icons.map((icon) => {
+        const rect = icon.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      }),
+    );
+  expect(sizes.length).toBeGreaterThan(1);
+  for (const { width, height } of sizes) {
+    expect(width).toBeCloseTo(17, 1);
+    expect(height).toBeCloseTo(17, 1);
   }
 });
 
