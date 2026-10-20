@@ -17,14 +17,23 @@ const changeTypes = new Set<KnowledgeBaseChange["type"]>([
   "document-removed",
 ]);
 
+async function refreshKnowledgeBase(queryClient: QueryClient): Promise<void> {
+  const filters = {
+    predicate: (query: { queryKey: readonly unknown[] }) =>
+      remoteQueryKeys.has(String(query.queryKey[0])),
+  };
+  // A request started before the stream connected may contain an older snapshot.
+  // Cancel it before refetching so its late response cannot overwrite fresh data.
+  await queryClient.cancelQueries(filters);
+  await queryClient.invalidateQueries(filters);
+}
+
 export async function applyKnowledgeBaseChange(
   queryClient: QueryClient,
   change: KnowledgeBaseChange,
 ): Promise<void> {
   if (change.resync) {
-    await queryClient.invalidateQueries({
-      predicate: (query) => remoteQueryKeys.has(String(query.queryKey[0])),
-    });
+    await refreshKnowledgeBase(queryClient);
     return;
   }
 
@@ -48,6 +57,10 @@ export function LiveKnowledgeBaseChanges() {
 
   useEffect(() => {
     const events = new EventSource("/api/events");
+    const handleOpen = () => {
+      void refreshKnowledgeBase(queryClient);
+    };
+    events.addEventListener("open", handleOpen);
     const handleChange = (event: Event) => {
       try {
         const change = JSON.parse((event as MessageEvent<string>).data) as
