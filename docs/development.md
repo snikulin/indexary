@@ -57,6 +57,11 @@ The stable project interface is:
 
 Package-level scripts and granular checks are workspace implementation details, not a second public task interface.
 
+Assembled server integration tests allow 15 seconds per test because they create
+and index real filesystem trees (including a 1,500-Document startup race).
+Performance budgets are verified separately by `mise run perf:index`; focused
+tests keep their normal timeout.
+
 `mise run check` comprises formatting verification, linting, type checking,
 focused server and web tests, assembled Fastify integration tests against real
 temporary files and SQLite FTS5, an optimized application build, and the short
