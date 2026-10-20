@@ -19,7 +19,7 @@ import { afterEach, describe, expect, test } from "vitest";
 
 import {
   buildSafeFtsQuery,
-  createKnowledgeBase,
+  createKnowledgeBase as createRealKnowledgeBase,
   InvalidKnowledgeBasePath,
   KnowledgeBaseStartupError,
   readDiscoveredDocument,
@@ -32,6 +32,15 @@ const fixtureRoot = path.resolve(
   "../../../fixtures/knowledge-base",
 );
 const temporaryDirectories: string[] = [];
+const openKnowledgeBases: ReturnType<typeof createRealKnowledgeBase>[] = [];
+
+function createKnowledgeBase(
+  ...arguments_: Parameters<typeof createRealKnowledgeBase>
+) {
+  const knowledgeBase = createRealKnowledgeBase(...arguments_);
+  openKnowledgeBases.push(knowledgeBase);
+  return knowledgeBase;
+}
 
 async function createTestKnowledgeBase(root: string, profile: string) {
   const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
@@ -62,6 +71,8 @@ async function waitForCandidate(cacheRoot: string): Promise<string> {
 }
 
 afterEach(async () => {
+  // Stop watchers and await indexing before removing their source and cache trees.
+  await Promise.all(openKnowledgeBases.splice(0).map((base) => base.close()));
   await Promise.all(
     temporaryDirectories
       .splice(0)

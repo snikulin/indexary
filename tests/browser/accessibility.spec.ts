@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+test.afterEach(async ({ page }) => {
+  // Let intercepted refetches finish before Playwright closes the page.
+  await page.unrouteAll({ behavior: "wait" });
+});
+
 async function expectVisibleControlsToBeNamed(scope: Page | Locator) {
   const controls = scope.locator(
     "button:visible, a[href]:visible, input:visible, iframe:visible",
