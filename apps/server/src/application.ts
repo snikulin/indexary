@@ -382,6 +382,7 @@ export async function buildApplication(
             document: Type.String({ minLength: 1 }),
             id: Type.String({ minLength: 1 }),
             revision: Type.Optional(Type.Integer({ minimum: 0 })),
+            download: Type.Optional(Type.Literal("1")),
           },
           { additionalProperties: false },
         ),
@@ -402,7 +403,9 @@ export async function buildApplication(
 
         const range = parseByteRange(request.headers.range, material.size);
         const disposition =
-          material.preview === "unsupported" ? "attachment" : "inline";
+          request.query.download === "1" || material.preview === "unsupported"
+            ? "attachment"
+            : "inline";
         reply.headers({
           "accept-ranges": "bytes",
           "cache-control": "private, no-store",

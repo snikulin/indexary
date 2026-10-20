@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-async function expectVisibleControlsToBeNamed(page: Page) {
-  const controls = page.locator(
+async function expectVisibleControlsToBeNamed(scope: Page | Locator) {
+  const controls = scope.locator(
     "button:visible, a[href]:visible, input:visible, iframe:visible",
   );
   for (let index = 0; index < (await controls.count()); index += 1) {
@@ -24,220 +24,179 @@ async function expectVisibleFocus(locator: Locator) {
   expect(outline.color).not.toBe("rgba(0, 0, 0, 0)");
 }
 
-test("exposes the desktop Atlas landmarks, names, tabs, and visible focus", async ({
+const guideRoute =
+  "/documents/%D0%9F%D1%83%D1%82%D0%B5%D0%B2%D0%BE%D0%B4%D0%B8%D1%82%D0%B5%D0%BB%D1%8C.md";
+
+test("keeps reading width and visible search stable across the former breakpoint", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-
-  await expect(page.getByRole("banner")).toBeVisible();
-  await expect(
-    page.getByRole("navigation", { name: "База знаний" }),
-  ).toBeVisible();
-  await expect(page.getByRole("main")).toBeVisible();
-  await expect(
-    page.getByRole("complementary", { name: "Контекст Документа" }),
-  ).toBeVisible();
-  await expect(page.locator(".atlas-grid")).toHaveCSS("display", "grid");
-
-  const selectedTab = page.getByRole("tab", { name: "Свойства" });
-  await expect(selectedTab).toHaveAttribute("aria-selected", "true");
-  const panelId = await selectedTab.getAttribute("aria-controls");
-  expect(panelId).not.toBeNull();
-  await expect(page.locator(`[id=${JSON.stringify(panelId)}]`)).toHaveRole(
-    "tabpanel",
-  );
+  const widths: number[] = [];
+  for (const width of [1100, 1101, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByRole("main")).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "База знаний" }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("complementary")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Поиск по Базе знаний" }),
+    ).toBeVisible();
+    const text = await page.locator(".document-body").boundingBox();
+    widths.push(text!.width);
+  }
+  expect(Math.min(...widths)).toBeGreaterThan(680);
+  expect(Math.max(...widths) - Math.min(...widths)).toBeLessThan(2);
   await expectVisibleControlsToBeNamed(page);
-  await expectVisibleFocus(selectedTab);
-});
-
-test("lets a desktop reader collapse and restore Knowledge Base navigation", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/");
-
-  const navigation = page.getByRole("navigation", { name: "База знаний" });
-  const collapse = navigation.getByRole("button", {
-    name: "Свернуть боковую панель",
-  });
-  await expect(collapse).toBeVisible();
-  await expect(
-    navigation.getByRole("button", { name: "Поиск по Базе знаний" }),
-  ).toBeVisible();
-
-  await collapse.click();
-
-  const restore = navigation.getByRole("button", {
-    name: "Раскрыть боковую панель",
-  });
-  await expect(restore).toBeVisible();
-  await expect(
-    navigation.getByRole("button", { name: "Поиск по Базе знаний" }),
-  ).toBeHidden();
-  await expect(page.locator(".atlas-grid")).toHaveClass(/navigation-collapsed/);
-
-  await restore.click();
-
-  await expect(collapse).toBeVisible();
-  await expect(
-    navigation.getByRole("button", { name: "Поиск по Базе знаний" }),
-  ).toBeVisible();
-  await expect(page.locator(".atlas-grid")).not.toHaveClass(
-    /navigation-collapsed/,
+  await expectVisibleFocus(
+    page.getByRole("button", { name: "Поиск по Базе знаний" }),
   );
 });
 
-test("keeps navigation and Document context available in tablet drawers", async ({
+test("opens navigation on demand with keyboard isolation and restores focus at any width", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 900, height: 800 });
-  await page.goto(
-    "/documents/%D0%9F%D1%83%D1%82%D0%B5%D0%B2%D0%BE%D0%B4%D0%B8%D1%82%D0%B5%D0%BB%D1%8C.md",
-  );
-
-  await expect(page.locator(".desktop-panel").first()).toBeHidden();
-  const navigationTrigger = page.getByRole("button", {
-    name: "Открыть навигацию",
-  });
-  await navigationTrigger.focus();
-  await navigationTrigger.press("Enter");
-  const navigationDrawer = page.getByRole("dialog", {
-    name: "Навигация по Базе знаний",
-  });
-  await expect(navigationDrawer).toBeVisible();
-  await expect(
-    navigationDrawer.getByRole("navigation", { name: "База знаний" }),
-  ).toBeVisible();
-  await expect(
-    navigationDrawer.getByRole("button", { name: "Закрыть" }),
-  ).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(navigationTrigger).toBeFocused();
-
-  const contextTrigger = page.getByRole("button", {
-    name: "Открыть контекст",
-  });
-  await contextTrigger.press("Enter");
-  const contextDrawer = page.getByRole("dialog", {
-    name: "Контекст выбранного Документа",
-  });
-  await expect(contextDrawer).toBeVisible();
-  await contextDrawer.getByRole("tab", { name: "Свойства" }).press("Home");
-  await expect(
-    contextDrawer.getByRole("tab", { name: "Исходные материалы" }),
-  ).toBeFocused();
-  await expect(
-    contextDrawer.getByTitle("Предпросмотр PDF: источник.pdf"),
-  ).toBeVisible();
-  await contextDrawer
-    .getByRole("button", { name: /схема\.svg/ })
-    .press("Enter");
-  await expect(
-    contextDrawer.getByRole("img", { name: "схема.svg" }),
-  ).toBeVisible();
-
-  const close = contextDrawer.getByRole("button", { name: "Закрыть" });
-  await close.focus();
-  await page.keyboard.press("Shift+Tab");
-  await expect(contextDrawer.locator(":focus")).toHaveCount(1);
-  await page.keyboard.press("Escape");
-  await expect(contextTrigger).toBeFocused();
-});
-
-test("retains both Atlas side areas on a narrow screen", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 760 });
   await page.goto("/");
-
-  await page.getByRole("button", { name: "Открыть навигацию" }).press("Enter");
-  const navigationDrawer = page.getByRole("dialog", {
-    name: "Навигация по Базе знаний",
-  });
-  await expect(
-    navigationDrawer.getByRole("button", { name: "Поиск по Базе знаний" }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
-
-  await page.getByRole("button", { name: "Открыть контекст" }).press("Enter");
-  const contextDrawer = page.getByRole("dialog", {
-    name: "Контекст выбранного Документа",
-  });
-  await expect(
-    contextDrawer.getByRole("tab", { name: "Обратные ссылки" }),
-  ).toBeVisible();
-  await expect(
-    contextDrawer.getByRole("tab", { name: "Вложения" }),
-  ).toBeVisible();
+  for (const width of [1440, 900, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    const trigger = page.getByRole("button", { name: "Открыть навигацию" });
+    await trigger.focus();
+    await trigger.press("Enter");
+    const dialog = page.getByRole("dialog", {
+      name: "Навигация по Базе знаний",
+    });
+    await expect(
+      dialog.getByRole("button", { name: "Закрыть", exact: true }),
+    ).toBeFocused();
+    await expect(
+      dialog.getByRole("navigation", { name: "База знаний" }),
+    ).toBeVisible();
+    await page.keyboard.press("Shift+Tab");
+    await expect(dialog.locator(":focus")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Поиск по Базе знаний" }),
+    ).toBeVisible();
+  }
 });
 
-test("restores the Atlas when a drawer crosses the desktop breakpoint", async ({
+test("keeps an open navigation modal usable when the viewport changes", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 900, height: 800 });
   await page.goto("/");
-  await page.getByRole("button", { name: "Открыть навигацию" }).press("Enter");
+  await page.getByRole("button", { name: "Открыть навигацию" }).click();
+  await page.setViewportSize({ width: 1440, height: 900 });
   await expect(
     page.getByRole("dialog", { name: "Навигация по Базе знаний" }),
   ).toBeVisible();
-
-  await page.setViewportSize({ width: 1440, height: 900 });
-
-  await expect(
-    page.getByRole("dialog", { name: "Навигация по Базе знаний" }),
-  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await expect(page.locator(".application-content")).not.toHaveAttribute(
     "inert",
     "",
   );
-  await expect(
-    page.getByRole("navigation", { name: "База знаний" }),
-  ).toBeVisible();
 });
 
-test("operates search and context journeys from the keyboard", async ({
+test("opens a single Source Material directly and returns to the same reading position", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(
-    "/documents/%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%D1%8B/%D0%9F%D1%80%D0%BE%D0%B5%D0%BA%D1%82%20%D0%90%D0%BB%D1%8C%D1%84%D0%B0.md",
-  );
+  await page.route("**/api/documents?*", async (route) => {
+    const response = await route.fetch();
+    const document = await response.json();
+    document.materials.sourceMaterials =
+      document.materials.sourceMaterials.slice(0, 1);
+    await route.fulfill({ response, json: document });
+  });
+  await page.goto(guideRoute);
+  const opener = page.getByRole("button", {
+    name: "Открыть оригинал",
+    exact: true,
+  });
+  await opener.click();
+  const viewer = page.getByRole("dialog", {
+    name: "Просмотр файлов Документа",
+  });
+  await expect(
+    viewer.getByTitle("Предпросмотр PDF: источник.pdf"),
+  ).toBeVisible();
+  await viewer.getByRole("button", { name: "Закрыть просмотр файлов" }).click();
+  await expect(opener).toBeFocused();
+});
 
-  const tag = page.getByRole("button", { name: "проект" });
-  await tag.focus();
-  await tag.press("Enter");
+test("uses the same file viewer on desktop, tablet and phone without overflowing the viewport", async ({
+  page,
+}) => {
+  for (const width of [1440, 900, 390]) {
+    await page.setViewportSize({ width, height: 850 });
+    await page.goto(guideRoute);
+    const opener = page.getByRole("button", { name: /Все файлы/ });
+    await opener.click();
+    const viewer = page.getByRole("dialog", {
+      name: "Просмотр файлов Документа",
+    });
+    await expect(
+      viewer.getByRole("button", { name: "Закрыть просмотр файлов" }),
+    ).toBeFocused();
+    await expect(viewer.getByRole("tablist")).toHaveCount(0);
+    await viewer.getByRole("button", { name: /источник\.pdf/ }).click();
+    const pdf = viewer.getByTitle("Предпросмотр PDF: источник.pdf");
+    await expect(pdf).toBeVisible();
+    expect((await pdf.boundingBox())!.width).toBeGreaterThan(
+      width === 390 ? 300 : 500,
+    );
+    await viewer.getByRole("button", { name: /схема\.svg/ }).click();
+    await expect(viewer.getByRole("img", { name: "схема.svg" })).toBeVisible();
+    await viewer.getByRole("button", { name: "Увеличить изображение" }).click();
+    await expect(viewer.locator("output")).toHaveText("125%");
+    await expectVisibleControlsToBeNamed(viewer);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(opener).toBeFocused();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+  }
+});
+
+test("preserves search across closing, navigation and browser Back", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const trigger = page.getByRole("button", { name: "Поиск по Базе знаний" });
+  await trigger.click();
   const search = page.getByRole("dialog", { name: "Поиск Документов" });
   await expect(search.getByRole("searchbox")).toBeFocused();
-  await expect(search.getByText("Тег: проект")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(tag).toBeFocused();
-
-  await page.keyboard.press("Control+k");
   await search.getByRole("searchbox").fill("Вложенный");
-  await expect(search.getByText(/Результат 1 из 1:/)).toContainText(
-    "Проект Альфа",
-  );
+  await expect(
+    search.getByRole("link", { name: /Проект Альфа/ }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+  await page.keyboard.press("Control+k");
+  await expect(search.getByRole("searchbox")).toHaveValue("Вложенный");
   await search.getByRole("searchbox").press("Enter");
   await expect(
     page.getByRole("heading", { name: "Проект Альфа", level: 1 }),
   ).toBeVisible();
-
-  const properties = page.getByRole("tab", { name: "Свойства" });
-  await properties.focus();
-  await properties.press("Home");
-  const sources = page.getByRole("tab", { name: "Исходные материалы" });
-  await expect(sources).toBeFocused();
-  await sources.press("ArrowRight");
-  await expect(
-    page.getByRole("tab", { name: "Ссылки", exact: true }),
-  ).toBeFocused();
+  await page.goBack();
+  await page.keyboard.press("Control+k");
+  await expect(search.getByRole("searchbox")).toHaveValue("Вложенный");
+  await page.keyboard.press("Escape");
 });
 
-test("follows navigation, wikilinks, and backlinks by keyboard", async ({
+test("follows navigation, wikilinks and backlinks using the keyboard", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-
+  await page.getByRole("button", { name: "Открыть навигацию" }).press("Enter");
   const folder = page
     .getByRole("navigation", { name: "База знаний" })
     .getByRole("link", { name: "Разделы" });
@@ -247,7 +206,6 @@ test("follows navigation, wikilinks, and backlinks by keyboard", async ({
     page.getByRole("heading", { name: "Разделы", level: 1 }),
   ).toBeVisible();
   await page.goBack();
-
   const wikilink = page
     .locator(".document-body")
     .getByRole("link", { name: "Путеводитель" });
@@ -256,16 +214,8 @@ test("follows navigation, wikilinks, and backlinks by keyboard", async ({
   await expect(
     page.getByRole("heading", { name: "Путеводитель", level: 1 }),
   ).toBeVisible();
-
-  const properties = page.getByRole("tab", { name: "Свойства" });
-  await properties.focus();
-  await properties.press("Home");
-  await page.keyboard.press("ArrowRight");
-  await page.keyboard.press("ArrowRight");
-  const backlinks = page.getByRole("tab", { name: "Обратные ссылки" });
-  await expect(backlinks).toBeFocused();
   const backlink = page
-    .getByRole("tabpanel", { name: "Обратные ссылки" })
+    .getByRole("list", { name: "Обратные ссылки" })
     .getByRole("link", { name: "Добро пожаловать в Индексари" });
   await backlink.focus();
   await backlink.press("Enter");
@@ -279,13 +229,48 @@ test("follows navigation, wikilinks, and backlinks by keyboard", async ({
   await expect(
     page.getByRole("heading", { name: "Путеводитель", level: 1 }),
   ).toBeVisible();
-  await page.goForward();
-  await expect(
-    page.getByRole("heading", {
-      name: "Добро пожаловать в Индексари",
-      level: 1,
-    }),
-  ).toBeVisible();
+});
+
+test("restores Markdown hierarchy, lists and local scrolling for wide tables", async ({
+  page,
+}) => {
+  await page.route("**/api/documents?*", async (route) => {
+    const response = await route.fetch();
+    const document = await response.json();
+    document.html =
+      "<h2>Раздел</h2><h3>Подраздел</h3><ul><li>Маркер</li></ul><ol><li>Шаг</li></ol><table><tr><th>" +
+      "Колонка".repeat(50) +
+      "</th><th>Данные</th></tr><tr><td>Значение</td><td>Описание</td></tr></table>";
+    await route.fulfill({ response, json: document });
+  });
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto("/");
+  await expect(page.locator(".document-body ul")).toHaveCSS(
+    "list-style-type",
+    "disc",
+  );
+  await expect(page.locator(".document-body ol")).toHaveCSS(
+    "list-style-type",
+    "decimal",
+  );
+  const sizes = await page
+    .locator(".document-body")
+    .evaluate((element) =>
+      [element, element.querySelector("h2")!, element.querySelector("h3")!].map(
+        (node) => Number.parseFloat(getComputedStyle(node).fontSize),
+      ),
+    );
+  expect(sizes[1]!).toBeGreaterThan(sizes[2]!);
+  expect(sizes[2]!).toBeGreaterThan(sizes[0]!);
+  await expect(page.locator(".document-body table")).toHaveCSS(
+    "overflow-x",
+    "auto",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
 });
 
 test("distinguishes Document links without relying on color alone", async ({

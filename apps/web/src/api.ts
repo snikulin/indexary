@@ -124,6 +124,7 @@ export function materialUrl(
   documentPath: string,
   materialId: string,
   revision?: number,
+  options?: { download?: boolean },
 ): string {
   const parameters = new URLSearchParams({
     document: documentPath,
@@ -132,6 +133,7 @@ export function materialUrl(
   if (revision !== undefined) {
     parameters.set("revision", String(revision));
   }
+  if (options?.download) parameters.set("download", "1");
   return `/api/materials?${parameters}`;
 }
 

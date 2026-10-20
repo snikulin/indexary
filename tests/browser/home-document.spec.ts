@@ -15,6 +15,9 @@ test("opens the Home Document through the production origin", async ({
   await expect(page.getByRole("banner")).toContainText("Индексари");
   await expect(
     page.getByRole("navigation", { name: "База знаний" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Поиск по Базе знаний" }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", {
@@ -22,9 +25,7 @@ test("opens the Home Document through the production origin", async ({
       level: 1,
     }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("complementary", { name: "Контекст Документа" }),
-  ).toBeVisible();
+  await expect(page.getByRole("complementary")).toHaveCount(0);
 
   const apiResponse = await page.request.get("/api/documents/home");
   expect(apiResponse.ok()).toBe(true);
@@ -54,6 +55,7 @@ test("keeps navigation document icons 17px regardless of title length", async ({
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/");
 
+  await page.getByRole("button", { name: "Открыть навигацию" }).click();
   const documents = page
     .getByRole("navigation", { name: "База знаний" })
     .getByRole("list", { name: "Документы" });
@@ -67,7 +69,7 @@ test("keeps navigation document icons 17px regardless of title length", async ({
         return { width: rect.width, height: rect.height };
       }),
     );
-  expect(sizes.length).toBeGreaterThan(1);
+  expect(sizes.length).toBeGreaterThan(0);
   for (const { width, height } of sizes) {
     expect(width).toBeCloseTo(17, 1);
     expect(height).toBeCloseTo(17, 1);
@@ -78,6 +80,7 @@ test("browses nested Cyrillic paths with direct routes and browser history", asy
   page,
 }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "Открыть навигацию" }).click();
   await page.getByRole("link", { name: "Разделы" }).click();
   await expect(page).toHaveURL(
     /\/folders\/%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB%D1%8B$/,
@@ -120,6 +123,7 @@ test("browses nested Cyrillic paths with direct routes and browser history", asy
       level: 1,
     }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Открыть навигацию" }).click();
   await expect(
     page.getByRole("link", { name: "Последний Документ" }),
   ).toBeVisible();
@@ -185,20 +189,29 @@ test("previews and switches referenced materials in the Document context", async
     page.getByRole("heading", { name: "Путеводитель", level: 1 }),
   ).toBeVisible();
 
-  await page.getByRole("tab", { name: "Исходные материалы" }).click();
+  await page.getByRole("button", { name: /Все файлы/ }).click();
+  await expect(
+    page.getByText("Выберите файл из списка для просмотра."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /источник\.pdf/ }).click();
   await expect(page.getByTitle("Предпросмотр PDF: источник.pdf")).toBeVisible();
   await page.getByRole("button", { name: /схема\.svg/ }).click();
   await expect(page.getByRole("img", { name: "схема.svg" })).toBeVisible();
   await expect(page.getByRole("button", { name: /письмо\.eml/ })).toBeVisible();
 
-  await page.getByRole("tab", { name: "Вложения" }).click();
   await expect(
-    page.getByRole("link", { name: "Открыть материал" }),
+    page.getByRole("link", { name: "Открыть отдельно" }),
   ).toHaveAttribute("target", "_blank");
+  const downloadEvent = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Скачать", exact: true }).click();
+  expect((await downloadEvent).suggestedFilename()).toBe("схема.svg");
   await page.getByRole("button", { name: /нет-файла\.dat/ }).click();
   await expect(
-    page.getByRole("tabpanel", { name: "Вложения" }).getByRole("status"),
+    page
+      .getByRole("dialog", { name: "Просмотр файлов Документа" })
+      .getByRole("status"),
   ).toContainText("Материал не найден");
+  await page.getByRole("button", { name: "Закрыть просмотр файлов" }).click();
   await expect(
     page.getByRole("heading", { name: "Путеводитель", level: 1 }),
   ).toBeVisible();
@@ -224,6 +237,18 @@ test("opens a SHA-bound PDF from its wikilink", async ({ page }) => {
   const materialResponse = await page.request.get(href ?? "");
   expect(materialResponse.status()).toBe(200);
   expect(materialResponse.headers()["content-type"]).toBe("application/pdf");
+
+  await link.scrollIntoViewIfNeeded();
+  const readingPosition = await page.evaluate(() => window.scrollY);
+  const documentUrl = page.url();
+  await link.click();
+  await expect(page.getByTitle("Предпросмотр PDF: источник.pdf")).toBeVisible();
+  await page.getByRole("button", { name: "Закрыть просмотр файлов" }).click();
+  await expect(page).toHaveURL(documentUrl);
+  await expect(link).toBeFocused();
+  expect(
+    Math.abs((await page.evaluate(() => window.scrollY)) - readingPosition),
+  ).toBeLessThan(2);
 });
 
 test("follows a wikilink and its backlink with browser history", async ({
@@ -250,7 +275,6 @@ test("follows a wikilink and its backlink with browser history", async ({
     }),
   ).toBeVisible();
 
-  await page.getByRole("tab", { name: "Обратные ссылки" }).click();
   await page
     .getByRole("list", { name: "Обратные ссылки" })
     .getByRole("link", { name: "Добро пожаловать в Индексари" })

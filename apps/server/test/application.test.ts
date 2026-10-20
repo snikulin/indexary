@@ -538,6 +538,27 @@ original_path: materials/legacy.eml
     });
     expect(pdf.headers["content-disposition"]).toContain("inline");
 
+    const download = await app.inject({
+      method: "GET",
+      url: "/api/materials",
+      query: {
+        document: "Раздел/Материалы.md",
+        id: "source-material-0",
+        download: "1",
+      },
+    });
+    expect(download.statusCode).toBe(200);
+    expect(download.body).toBe(pdf.body);
+    expect(download.headers["content-disposition"]).toContain("attachment;");
+    expect(download.headers["content-disposition"]).toContain("source.pdf");
+    expect(
+      (
+        await app.inject(
+          "/api/materials?document=index.md&id=source-material-0&download=yes",
+        )
+      ).statusCode,
+    ).toBe(400);
+
     const eml = await app.inject({
       method: "GET",
       url: "/api/materials",

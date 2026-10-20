@@ -69,7 +69,10 @@ const rootCatalog = {
   diagnostics: [],
 };
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  sessionStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
@@ -105,14 +108,16 @@ describe("Atlas", () => {
     renderAtlas();
 
     expect(
-      screen.getByRole("navigation", { name: "База знаний" }),
+      screen.queryByRole("navigation", { name: "База знаний" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Поиск по Базе знаний" }),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", { name: "Домашний документ" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("complementary", { name: "Контекст Документа" }),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Сведения", { selector: "summary" }));
     expect(screen.getByRole("list", { name: "Теги" })).toHaveTextContent(
       "важное",
     );
@@ -121,6 +126,7 @@ describe("Atlas", () => {
     expect(
       screen.getByText("Ссылка с небезопасной схемой отключена."),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Открыть навигацию" }));
     expect(
       await screen.findByRole("link", { name: "Раздел с пробелом" }),
     ).toHaveAttribute(
@@ -187,11 +193,7 @@ describe("Atlas", () => {
     );
     expect(screen.queryByText("Содержимое")).not.toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    expect(
-      within(
-        screen.getByRole("complementary", { name: "Контекст Документа" }),
-      ).getByRole("status"),
-    ).toHaveTextContent("Контекст появится после выбора Документа.");
+    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
   });
 
   test("keeps encoded Cyrillic, spaced, and Linux backslash routes stable", () => {
@@ -206,7 +208,7 @@ describe("Atlas", () => {
     );
   });
 
-  test("switches among Source Materials and Attachments without leaving the Document", async () => {
+  test("uses one file list for Source Materials, Attachments and unavailable files", async () => {
     const materialDocument = {
       ...home,
       materials: {
@@ -273,9 +275,12 @@ describe("Atlas", () => {
     );
     renderAtlas();
 
-    fireEvent.click(
-      await screen.findByRole("tab", { name: "Исходные материалы" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: /Все файлы/ }));
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Выберите файл из списка для просмотра."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /схема\.svg/ }));
     expect(
       await screen.findByRole("img", { name: "схема.svg" }),
     ).toHaveAttribute(
@@ -290,16 +295,17 @@ describe("Atlas", () => {
     fireEvent.click(screen.getByRole("button", { name: /нет\.pdf/ }));
     expect(
       screen.getByText("Материал не найден.", {
-        selector: ".material-diagnostic",
+        selector: ".material-state p",
       }),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Вложения" }));
-    expect(
-      screen.getByRole("link", { name: "Открыть материал" }),
-    ).toHaveAttribute(
+    fireEvent.click(screen.getByRole("button", { name: /черновик\.docx/ }));
+    expect(screen.getAllByRole("link", { name: "Скачать" })[0]).toHaveAttribute(
       "href",
-      "/api/materials?document=index.md&id=attachment-0",
+      "/api/materials?document=index.md&id=attachment-0&download=1",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Закрыть просмотр файлов" }),
     );
     expect(
       screen.getByRole("heading", { name: "Домашний документ" }),
@@ -311,7 +317,6 @@ describe("Atlas", () => {
     renderAtlas();
     await screen.findByRole("heading", { name: "Домашний документ" });
 
-    fireEvent.click(screen.getByRole("tab", { name: "Ссылки" }));
     expect(screen.getByRole("link", { name: "Цель" })).toHaveAttribute(
       "href",
       documentRoute("Раздел/Цель.md"),
@@ -322,7 +327,6 @@ describe("Atlas", () => {
     expect(screen.getByText("Пропавшая")).toHaveClass("relationship-missing");
     expect(screen.getByText("Дубль")).toHaveClass("relationship-ambiguous");
 
-    fireEvent.click(screen.getByRole("tab", { name: "Обратные ссылки" }));
     expect(screen.getByRole("link", { name: "Источник" })).toHaveAttribute(
       "href",
       documentRoute("Источник.md"),
@@ -467,33 +471,150 @@ describe("Atlas", () => {
     expect(
       await screen.findByRole("heading", { name: "Документ недоступен" }),
     ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Открыть навигацию" }));
     expect(
-      within(screen.getByRole("navigation", { name: "База знаний" })).getByRole(
-        "status",
-      ),
-    ).toHaveTextContent("Сервер не смог загрузить каталог.");
+      await screen.findByText("Сервер не смог загрузить каталог."),
+    ).toBeInTheDocument();
   });
 
-  test("supports arrow-key tab selection with complete tab semantics", async () => {
-    stubSuccessfulRequests();
+  test("keeps search criteria after closing and reopening from the toolbar", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => ({
+        ok: true,
+        json: async () =>
+          String(input).startsWith("/api/search") ? { results: [] } : home,
+      })),
+    );
     renderAtlas();
-    const properties = await screen.findByRole("tab", { name: "Свойства" });
-
-    properties.focus();
-    fireEvent.keyDown(properties, { key: "Home" });
-    const sources = screen.getByRole("tab", { name: "Исходные материалы" });
-    expect(sources).toHaveFocus();
-    expect(sources).toHaveAttribute("aria-selected", "true");
-    const panel = screen.getByRole("tabpanel", {
-      name: "Исходные материалы",
+    fireEvent.click(
+      screen.getByRole("button", { name: "Поиск по Базе знаний" }),
+    );
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "квитанция" },
     });
-    expect(sources).toHaveAttribute("aria-controls", panel.id);
-
-    fireEvent.keyDown(sources, { key: "ArrowRight" });
-    expect(screen.getByRole("tab", { name: "Ссылки" })).toHaveFocus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Поиск по Базе знаний" }),
+    );
+    expect(screen.getByRole("searchbox")).toHaveValue("квитанция");
     expect(
-      screen.getByRole("tabpanel", { name: "Ссылки" }),
+      JSON.parse(sessionStorage.getItem("indexary:search") ?? "null"),
+    ).toEqual({ query: "квитанция" });
+  });
+
+  test("preserves file identity through live reorder and detects removed references", async () => {
+    const image = {
+      id: "source-material-0",
+      kind: "source-material",
+      name: "схема.svg",
+      path: "materials/схема.svg",
+      status: "available",
+      mimeType: "image/svg+xml",
+      size: 320,
+      preview: "image",
+    };
+    const materialDocument = {
+      ...home,
+      revision: 1,
+      materials: { sourceMaterials: [image], attachments: [] },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => materialDocument })),
+    );
+    const { queryClient } = renderAtlas();
+    const opener = await screen.findByRole("button", {
+      name: "Открыть оригинал",
+    });
+    opener.focus();
+    fireEvent.click(opener);
+    expect(
+      await screen.findByRole("img", { name: "схема.svg" }),
+    ).toHaveAttribute(
+      "src",
+      "/api/materials?document=index.md&id=source-material-0&revision=1",
+    );
+    await act(async () => {
+      queryClient.setQueryData(["document", "index.md"], {
+        ...materialDocument,
+        revision: 2,
+        materials: {
+          sourceMaterials: [
+            {
+              ...image,
+              id: "source-material-0",
+              path: "materials/другой.svg",
+              name: "другой.svg",
+            },
+            { ...image, id: "source-material-1" },
+          ],
+          attachments: [],
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "схема.svg" })).toHaveAttribute(
+        "src",
+        "/api/materials?document=index.md&id=source-material-1&revision=2",
+      ),
+    );
+    await act(async () => {
+      queryClient.setQueryData(["document", "index.md"], {
+        ...materialDocument,
+        revision: 3,
+        materials: {
+          sourceMaterials: [
+            { ...image, path: "materials/другой.svg", name: "другой.svg" },
+          ],
+          attachments: [],
+        },
+      });
+    });
+    expect(
+      await screen.findByText(/Этот файл больше не связан/),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Закрыть просмотр файлов" }),
+    );
+    expect(opener).toHaveFocus();
+  });
+
+  test("offers retry when an available image fails to load", async () => {
+    const representation = {
+      ...home,
+      materials: {
+        sourceMaterials: [
+          {
+            id: "source-material-0",
+            kind: "source-material",
+            name: "квитанция.jpg",
+            path: "files/квитанция.jpg",
+            status: "available",
+            mimeType: "image/jpeg",
+            size: 1000,
+            preview: "image",
+          },
+        ],
+        attachments: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, json: async () => representation })),
+    );
+    renderAtlas();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Открыть оригинал" }),
+    );
+    fireEvent.error(await screen.findByRole("img", { name: "квитанция.jpg" }));
+    expect(screen.getByText(/Не удалось загрузить файл/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    expect(screen.getByRole("img", { name: "квитанция.jpg" })).toHaveAttribute(
+      "src",
+      "/api/materials?document=index.md&id=source-material-0",
+    );
   });
 
   test("traps drawer focus, closes with Escape, and returns focus", async () => {

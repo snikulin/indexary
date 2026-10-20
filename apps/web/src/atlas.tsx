@@ -4,13 +4,11 @@ import {
   BookOpenText,
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
   FileText,
   FolderClosed,
   Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
-  PanelRightOpen,
+  Link2,
+  Home,
   Search,
   X,
 } from "lucide-react";
@@ -33,44 +31,48 @@ import {
   fetchSearch,
   folderRoute,
   isMissingRequest,
-  materialUrl,
   type DocumentRepresentation,
   type MaterialReference,
 } from "./api";
 import { Button } from "./components/ui/button";
+import { Modal } from "./components/ui/modal";
+import { MaterialViewer } from "./components/material-viewer";
 import { ru } from "./i18n/ru";
 
 export type AtlasSelection =
   | { kind: "document"; path: string; root?: boolean }
   | { kind: "folder"; path: string };
 
-interface DrawerState {
-  navigation: boolean;
-  context: boolean;
+interface SearchCriteria {
+  query: string;
+  tag?: string;
 }
 
-export type ContextSectionId =
-  | "source-materials"
-  | "outgoing-links"
-  | "backlinks"
-  | "attachments"
-  | "properties";
+type Overlay =
+  | { kind: "navigation" }
+  | { kind: "search" }
+  | {
+      kind: "files";
+      documentPath: string;
+      initialMaterial?: MaterialReference;
+    };
 
-const contextSections: readonly ContextSectionId[] = [
-  "source-materials",
-  "outgoing-links",
-  "backlinks",
-  "attachments",
-  "properties",
-];
-
-const contextSectionLabels: Record<ContextSectionId, string> = {
-  "source-materials": ru.sources,
-  "outgoing-links": ru.outgoingLinks,
-  backlinks: ru.backlinks,
-  attachments: ru.attachments,
-  properties: ru.properties,
-};
+function savedSearch(): SearchCriteria {
+  try {
+    const value = JSON.parse(
+      sessionStorage.getItem("indexary:search") ?? "null",
+    ) as SearchCriteria | null;
+    if (
+      value &&
+      typeof value.query === "string" &&
+      (value.tag === undefined || typeof value.tag === "string")
+    )
+      return { query: value.query, tag: value.tag };
+  } catch {
+    /* Browser storage is optional. */
+  }
+  return { query: "" };
+}
 
 function parentFolder(itemPath: string): string {
   const segments = itemPath.split("/");
@@ -95,99 +97,15 @@ function lastDocument(): string | undefined {
   }
 }
 
-const focusableSelector = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "iframe",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
-
-function useModalFocus(
-  containerRef: RefObject<HTMLElement | null>,
-  initialFocusRef: RefObject<HTMLElement | null>,
-  returnFocusRef: RefObject<HTMLElement | null>,
-  close: () => void,
-) {
-  useEffect(() => {
-    const container = containerRef.current;
-    const returnTarget = returnFocusRef.current;
-    if (container === null) {
-      return;
-    }
-
-    const focusInitial = () => {
-      const target =
-        initialFocusRef.current ??
-        container.querySelector<HTMLElement>(focusableSelector);
-      target?.focus();
-    };
-    focusInitial();
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        close();
-        return;
-      }
-      if (event.key !== "Tab") {
-        return;
-      }
-
-      const focusable = Array.from(
-        container.querySelectorAll<HTMLElement>(focusableSelector),
-      ).filter((element) => element.getAttribute("aria-hidden") !== "true");
-      if (focusable.length === 0) {
-        event.preventDefault();
-        container.focus();
-        return;
-      }
-
-      const first = focusable[0]!;
-      const last = focusable.at(-1)!;
-      if (
-        event.shiftKey &&
-        (document.activeElement === first ||
-          !container.contains(document.activeElement))
-      ) {
-        event.preventDefault();
-        last.focus();
-      } else if (
-        !event.shiftKey &&
-        (document.activeElement === last ||
-          !container.contains(document.activeElement))
-      ) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-      if (returnTarget?.isConnected) {
-        returnTarget.focus();
-      }
-    };
-  }, [close, containerRef, initialFocusRef, returnFocusRef]);
-}
-
 function Navigation({
   selection,
   close,
   closeButtonRef,
-  collapsed = false,
-  toggleCollapsed,
   openSearch,
 }: {
   selection: AtlasSelection;
   close?: () => void;
   closeButtonRef?: RefObject<HTMLButtonElement | null>;
-  collapsed?: boolean;
-  toggleCollapsed?: () => void;
   openSearch: () => void;
 }) {
   const folderPath =
@@ -201,12 +119,9 @@ function Navigation({
   const parent = parentFolder(folderPath);
 
   return (
-    <nav
-      className={`navigation ${collapsed ? "navigation-collapsed" : ""}`}
-      aria-label={ru.knowledgeBase}
-    >
+    <nav className="navigation" aria-label={ru.knowledgeBase}>
       <div className="panel-heading">
-        <div hidden={collapsed}>
+        <div>
           <p className="eyebrow">{ru.atlas}</p>
           <h2>{ru.knowledgeBase}</h2>
         </div>
@@ -219,22 +134,9 @@ function Navigation({
           >
             <X aria-hidden="true" />
           </Button>
-        ) : toggleCollapsed ? (
-          <Button
-            className="icon-button navigation-toggle"
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? ru.expandNavigation : ru.collapseNavigation}
-            title={collapsed ? ru.expandNavigation : ru.collapseNavigation}
-          >
-            {collapsed ? (
-              <PanelLeftOpen aria-hidden="true" />
-            ) : (
-              <PanelLeftClose aria-hidden="true" />
-            )}
-          </Button>
         ) : null}
       </div>
-      <div className="navigation-content" hidden={collapsed}>
+      <div className="navigation-content">
         <button
           className="search-field"
           type="button"
@@ -258,7 +160,11 @@ function Navigation({
           <span>{ru.home}</span>
         </a>
         {recent ? (
-          <a className="tree-item recent-item" href={documentRoute(recent)}>
+          <a
+            className="tree-item recent-item"
+            href={documentRoute(recent)}
+            onClick={close}
+          >
             <FileText aria-hidden="true" />
             <span>{ru.lastDocument}</span>
           </a>
@@ -305,25 +211,27 @@ function Navigation({
               ))}
             </ul>
             <ul className="tree-list" aria-label={ru.documents}>
-              {catalogQuery.data.documents.map((document) => {
-                const isHome = document.path === "index.md";
-                const active =
-                  selection.kind === "document" &&
-                  selection.path === document.path;
-                return (
-                  <li key={document.path}>
-                    <a
-                      className={`tree-item ${active ? "active" : ""}`}
-                      href={isHome ? "/" : documentRoute(document.path)}
-                      aria-current={active ? "page" : undefined}
-                      onClick={close}
-                    >
-                      <FileText aria-hidden="true" />
-                      <span>{document.title}</span>
-                    </a>
-                  </li>
-                );
-              })}
+              {catalogQuery.data.documents
+                .filter((document) => document.path !== "index.md")
+                .map((document) => {
+                  const isHome = document.path === "index.md";
+                  const active =
+                    selection.kind === "document" &&
+                    selection.path === document.path;
+                  return (
+                    <li key={document.path}>
+                      <a
+                        className={`tree-item ${active ? "active" : ""}`}
+                        href={isHome ? "/" : documentRoute(document.path)}
+                        aria-current={active ? "page" : undefined}
+                        onClick={close}
+                      >
+                        <FileText aria-hidden="true" />
+                        <span>{document.title}</span>
+                      </a>
+                    </li>
+                  );
+                })}
             </ul>
             {catalogQuery.data.folders.length === 0 &&
             catalogQuery.data.documents.length === 0 ? (
@@ -348,21 +256,21 @@ function Navigation({
 }
 
 function SearchDialog({
-  initialTag,
+  criteria,
+  setCriteria,
   close,
   returnFocusRef,
 }: {
-  initialTag?: string;
+  criteria: SearchCriteria;
+  setCriteria: (criteria: SearchCriteria) => void;
   close: () => void;
   returnFocusRef: RefObject<HTMLElement | null>;
 }) {
-  const dialogRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsId = useId();
   const limitationsId = useId();
   const activeResultId = useId();
-  const [query, setQuery] = useState("");
-  const [tag, setTag] = useState(initialTag);
+  const { query, tag } = criteria;
   const [activeIndex, setActiveIndex] = useState(0);
   const resultLinks = useRef<Array<HTMLAnchorElement | null>>([]);
   const hasCriteria = query.trim() !== "" || tag !== undefined;
@@ -375,11 +283,17 @@ function SearchDialog({
   const results = searchQuery.data?.results ?? [];
   const activeResult = results[activeIndex];
 
-  useModalFocus(dialogRef, inputRef, returnFocusRef, close);
-
   useEffect(() => {
     setActiveIndex(0);
   }, [query, tag]);
+
+  useEffect(() => {
+    resultLinks.current[activeIndex]?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex]);
+
+  useEffect(() => {
+    setActiveIndex((index) => Math.min(index, Math.max(0, results.length - 1)));
+  }, [results.length]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
@@ -405,454 +319,157 @@ function SearchDialog({
   }
 
   return (
-    <div className="search-layer">
-      <div className="search-backdrop" aria-hidden="true" onClick={close} />
-      <section
-        ref={dialogRef}
-        className="search-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="search-heading"
-        aria-describedby={limitationsId}
-        tabIndex={-1}
-      >
-        <div className="search-heading">
-          <div>
-            <p className="eyebrow">{ru.knowledgeBase}</p>
-            <h2 id="search-heading">{ru.search}</h2>
-          </div>
-          <Button className="icon-button" onClick={close} aria-label={ru.close}>
-            <X aria-hidden="true" />
-          </Button>
-        </div>
-        <label className="search-dialog-field">
-          <Search aria-hidden="true" />
-          <span className="sr-only">{ru.searchPlaceholder}</span>
-          <input
-            ref={inputRef}
-            type="search"
-            placeholder={ru.searchPlaceholder}
-            value={query}
-            role="searchbox"
-            aria-controls={resultsId}
-            aria-describedby={`${limitationsId} ${activeResultId}`}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <kbd>{ru.searchShortcut}</kbd>
-        </label>
-        {tag === undefined ? null : (
-          <div className="active-tag-filter">
-            <span>{ru.tagFilter(tag)}</span>
-            <button
-              type="button"
-              aria-label={ru.clearTagFilter}
-              onClick={() => setTag(undefined)}
-            >
-              <X aria-hidden="true" />
-            </button>
-          </div>
-        )}
-
-        <div id={resultsId} className="search-results" aria-live="polite">
-          {!hasCriteria ? (
-            <p className="search-state" role="status">
-              {ru.searchPrompt}
-            </p>
-          ) : searchQuery.isPending ? (
-            <p className="search-state" role="status">
-              {ru.searchLoading}
-            </p>
-          ) : searchQuery.isError ? (
-            <div className="search-state" role="status">
-              <p>{ru.searchFailed}</p>
-              <Button onClick={() => void searchQuery.refetch()}>
-                {ru.retry}
-              </Button>
-            </div>
-          ) : results.length === 0 ? (
-            <p className="search-state" role="status">
-              {ru.searchEmpty}
-            </p>
-          ) : (
-            <>
-              <p className="search-count" role="status">
-                {ru.searchCount(results.length)}
-              </p>
-              <ul className="search-result-list">
-                {results.map((result, index) => (
-                  <li key={result.path}>
-                    <a
-                      ref={(element) => {
-                        resultLinks.current[index] = element;
-                      }}
-                      className={index === activeIndex ? "active" : ""}
-                      href={
-                        result.path === "index.md"
-                          ? "/"
-                          : documentRoute(result.path)
-                      }
-                      onMouseEnter={() => setActiveIndex(index)}
-                      onClick={close}
-                    >
-                      <strong>{result.title}</strong>
-                      <small>/{result.path}</small>
-                      <p className="search-snippet">
-                        {result.snippet.map((part, partIndex) =>
-                          part.highlighted ? (
-                            <mark key={partIndex}>{part.text}</mark>
-                          ) : (
-                            <span key={partIndex}>{part.text}</span>
-                          ),
-                        )}
-                      </p>
-                      {result.tags.length === 0 ? null : (
-                        <span className="search-result-tags">
-                          {result.tags.join(" · ")}
-                        </span>
-                      )}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-        <p id={activeResultId} className="sr-only" aria-live="polite">
-          {activeResult
-            ? ru.activeSearchResult(
-                activeIndex + 1,
-                results.length,
-                activeResult.title,
-              )
-            : ""}
-        </p>
-        <p id={limitationsId} className="search-limitations">
-          {ru.searchLimitations}
-        </p>
-      </section>
-    </div>
-  );
-}
-
-function Context({
-  selection,
-  close,
-  closeButtonRef,
-}: {
-  selection: AtlasSelection;
-  close?: () => void;
-  closeButtonRef?: RefObject<HTMLButtonElement | null>;
-}) {
-  const tabsId = useId();
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const documentPath =
-    selection.kind === "document" ? selection.path : undefined;
-  const documentQuery = useQuery({
-    queryKey: ["document", documentPath],
-    queryFn: () => fetchDocument(documentPath!),
-    enabled: documentPath !== undefined,
-    retry: false,
-  });
-  const [activeSection, setActiveSection] =
-    useState<ContextSectionId>("properties");
-  const [selectedMaterialId, setSelectedMaterialId] = useState<string>();
-
-  useEffect(() => {
-    setActiveSection("properties");
-    setSelectedMaterialId(undefined);
-  }, [documentPath]);
-
-  const materialKind =
-    activeSection === "source-materials"
-      ? "sourceMaterials"
-      : activeSection === "attachments"
-        ? "attachments"
-        : undefined;
-  const materials =
-    materialKind === undefined
-      ? []
-      : (documentQuery.data?.materials[materialKind] ?? []);
-  const selectedMaterial =
-    materials.find((material) => material.id === selectedMaterialId) ??
-    materials[0];
-  const activeTabId = `${tabsId}-tab-${activeSection}`;
-  const activePanelId = `${tabsId}-panel-${activeSection}`;
-
-  function selectTab(index: number) {
-    const section = contextSections[index];
-    if (section === undefined) {
-      return;
-    }
-    setActiveSection(section);
-    setSelectedMaterialId(undefined);
-    tabRefs.current[index]?.focus();
-  }
-
-  function handleTabKeyDown(
-    event: KeyboardEvent<HTMLButtonElement>,
-    index: number,
-  ) {
-    let nextIndex: number | undefined;
-    if (event.key === "ArrowRight") {
-      nextIndex = (index + 1) % contextSections.length;
-    } else if (event.key === "ArrowLeft") {
-      nextIndex = (index - 1 + contextSections.length) % contextSections.length;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = contextSections.length - 1;
-    }
-    if (nextIndex !== undefined) {
-      event.preventDefault();
-      selectTab(nextIndex);
-    }
-  }
-
-  return (
-    <aside className="context-panel" aria-label={ru.context}>
-      <div className="panel-heading">
+    <Modal
+      className="search-dialog"
+      label={ru.search}
+      initialFocusRef={inputRef}
+      returnFocusRef={returnFocusRef}
+      close={close}
+    >
+      <div className="search-heading">
         <div>
-          <p className="eyebrow">{ru.document}</p>
-          <h2>{ru.context}</h2>
+          <p className="eyebrow">{ru.knowledgeBase}</p>
+          <h2 id="search-heading">{ru.search}</h2>
         </div>
-        {close ? (
-          <Button
-            ref={closeButtonRef}
-            className="icon-button"
-            onClick={close}
-            aria-label={ru.close}
+        <Button className="icon-button" onClick={close} aria-label={ru.close}>
+          <X aria-hidden="true" />
+        </Button>
+      </div>
+      <label className="search-dialog-field">
+        <Search aria-hidden="true" />
+        <span className="sr-only">{ru.searchPlaceholder}</span>
+        <input
+          ref={inputRef}
+          type="search"
+          placeholder={ru.searchPlaceholder}
+          value={query}
+          role="searchbox"
+          aria-controls={resultsId}
+          aria-describedby={`${limitationsId} ${activeResultId}`}
+          onChange={(event) =>
+            setCriteria({ ...criteria, query: event.target.value })
+          }
+          onKeyDown={handleKeyDown}
+        />
+        <kbd>{ru.searchShortcut}</kbd>
+      </label>
+      {tag === undefined ? null : (
+        <div className="active-tag-filter">
+          <span>{ru.tagFilter(tag)}</span>
+          <button
+            type="button"
+            aria-label={ru.clearTagFilter}
+            onClick={() => setCriteria({ query })}
           >
             <X aria-hidden="true" />
-          </Button>
-        ) : null}
-      </div>
-      {selection.kind === "document" ? (
-        <div
-          className="context-tabs"
-          role="tablist"
-          aria-label={ru.contextSections}
-        >
-          {contextSections.map((section, index) => (
-            <button
-              ref={(element) => {
-                tabRefs.current[index] = element;
-              }}
-              key={section}
-              id={`${tabsId}-tab-${section}`}
-              className={section === activeSection ? "selected" : ""}
-              type="button"
-              role="tab"
-              aria-selected={section === activeSection}
-              aria-controls={`${tabsId}-panel-${section}`}
-              tabIndex={section === activeSection ? 0 : -1}
-              onClick={() => {
-                setActiveSection(section);
-                setSelectedMaterialId(undefined);
-              }}
-              onKeyDown={(event) => handleTabKeyDown(event, index)}
-            >
-              {contextSectionLabels[section]}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {selection.kind === "folder" ? (
-        <div className="empty-context" role="status">
-          <FileText aria-hidden="true" />
-          <p>{ru.contextForFolder}</p>
-        </div>
-      ) : documentQuery.isPending ? (
-        <div className="empty-context" role="status">
-          <FileText aria-hidden="true" />
-          <p>{ru.loadingContext}</p>
-        </div>
-      ) : documentQuery.isError ? (
-        <div className="empty-context" role="status">
-          <AlertTriangle aria-hidden="true" />
-          <p>
-            {isMissingRequest(documentQuery.error)
-              ? ru.contextUnavailable
-              : ru.contextServerError}
-          </p>
-          <Button onClick={() => void documentQuery.refetch()}>
-            {ru.retry}
-          </Button>
-        </div>
-      ) : documentQuery.data ? (
-        materialKind !== undefined ? (
-          <MaterialPanel
-            documentPath={documentQuery.data.path}
-            revision={documentQuery.data.revision}
-            heading={contextSectionLabels[activeSection]}
-            materials={materials}
-            selected={selectedMaterial}
-            select={setSelectedMaterialId}
-            panelId={activePanelId}
-            labelledBy={activeTabId}
-          />
-        ) : (
-          <ContextSection
-            document={documentQuery.data}
-            section={activeSection}
-            panelId={activePanelId}
-            labelledBy={activeTabId}
-          />
-        )
-      ) : (
-        <div className="empty-context">
-          <FileText aria-hidden="true" />
-          <p>{ru.emptyContext}</p>
+          </button>
         </div>
       )}
-    </aside>
+
+      <div id={resultsId} className="search-results" aria-live="polite">
+        {!hasCriteria ? (
+          <p className="search-state" role="status">
+            {ru.searchPrompt}
+          </p>
+        ) : searchQuery.isPending ? (
+          <p className="search-state" role="status">
+            {ru.searchLoading}
+          </p>
+        ) : searchQuery.isError ? (
+          <div className="search-state" role="status">
+            <p>{ru.searchFailed}</p>
+            <Button onClick={() => void searchQuery.refetch()}>
+              {ru.retry}
+            </Button>
+          </div>
+        ) : results.length === 0 ? (
+          <p className="search-state" role="status">
+            {ru.searchEmpty}
+          </p>
+        ) : (
+          <>
+            <p className="search-count" role="status">
+              {ru.searchCount(results.length)}
+            </p>
+            <ul className="search-result-list">
+              {results.map((result, index) => (
+                <li key={result.path}>
+                  <a
+                    ref={(element) => {
+                      resultLinks.current[index] = element;
+                    }}
+                    className={index === activeIndex ? "active" : ""}
+                    href={
+                      result.path === "index.md"
+                        ? "/"
+                        : documentRoute(result.path)
+                    }
+                    onMouseEnter={() => setActiveIndex(index)}
+                    onClick={close}
+                  >
+                    <strong>{result.title}</strong>
+                    <small>/{result.path}</small>
+                    <p className="search-snippet">
+                      {result.snippet.map((part, partIndex) =>
+                        part.highlighted ? (
+                          <mark key={partIndex}>{part.text}</mark>
+                        ) : (
+                          <span key={partIndex}>{part.text}</span>
+                        ),
+                      )}
+                    </p>
+                    {result.tags.length === 0 ? null : (
+                      <span className="search-result-tags">
+                        {result.tags.join(" · ")}
+                      </span>
+                    )}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+      <p id={activeResultId} className="sr-only" aria-live="polite">
+        {activeResult
+          ? ru.activeSearchResult(
+              activeIndex + 1,
+              results.length,
+              activeResult.title,
+            )
+          : ""}
+      </p>
+      <p id={limitationsId} className="search-limitations">
+        {ru.searchLimitations}
+      </p>
+    </Modal>
   );
 }
 
-function formatMaterialSize(size: number | null): string {
-  if (size === null) {
-    return ru.unknownSize;
-  }
-  if (size < 1024) {
-    return ru.bytes(size);
-  }
-  if (size < 1024 * 1024) {
-    return ru.kilobytes((size / 1024).toFixed(1));
-  }
-  return ru.megabytes((size / (1024 * 1024)).toFixed(1));
-}
-
-function MaterialPanel({
-  documentPath,
-  revision,
-  heading,
-  materials,
-  selected,
-  select,
-  panelId,
-  labelledBy,
+function DocumentContext({
+  representation,
 }: {
-  documentPath: string;
-  revision: number;
-  heading: string;
-  materials: MaterialReference[];
-  selected: MaterialReference | undefined;
-  select: (id: string) => void;
-  panelId: string;
-  labelledBy: string;
+  representation: DocumentRepresentation;
 }) {
+  if (
+    representation.outgoingLinks.length + representation.backlinks.length ===
+    0
+  )
+    return null;
   return (
     <section
-      id={panelId}
-      className="materials"
-      role="tabpanel"
-      aria-labelledby={labelledBy}
-      tabIndex={0}
+      id="document-relationships"
+      className="document-context"
+      aria-label={ru.context}
     >
-      <h3>{heading}</h3>
-      {materials.length === 0 ? (
-        <p className="empty-materials">{ru.noMaterials}</p>
-      ) : (
-        <>
-          <ul className="material-list">
-            {materials.map((material) => (
-              <li key={material.id}>
-                <button
-                  type="button"
-                  className={material.id === selected?.id ? "selected" : ""}
-                  aria-pressed={material.id === selected?.id}
-                  onClick={() => select(material.id)}
-                >
-                  <span>{material.name}</span>
-                  <small>
-                    {material.status === "available"
-                      ? material.mimeType
-                      : material.status === "missing"
-                        ? ru.materialMissing
-                        : ru.materialInvalid}
-                  </small>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {selected ? (
-            <div className="material-detail">
-              <h4>{selected.name}</h4>
-              <dl>
-                <div>
-                  <dt>{ru.materialType}</dt>
-                  <dd>{selected.mimeType}</dd>
-                </div>
-                <div>
-                  <dt>{ru.materialSize}</dt>
-                  <dd>{formatMaterialSize(selected.size)}</dd>
-                </div>
-              </dl>
-              {selected.diagnostic ? (
-                <p className="material-diagnostic" role="status">
-                  {selected.status === "missing"
-                    ? ru.materialMissing
-                    : ru.materialInvalid}
-                </p>
-              ) : selected.preview === "image" ? (
-                <img
-                  className="material-preview image-preview"
-                  src={materialUrl(documentPath, selected.id, revision)}
-                  alt={selected.name}
-                />
-              ) : selected.preview === "pdf" ? (
-                <iframe
-                  className="material-preview pdf-preview"
-                  src={materialUrl(documentPath, selected.id, revision)}
-                  title={`${ru.pdfPreview}: ${selected.name}`}
-                />
-              ) : (
-                <a
-                  className="material-open"
-                  href={materialUrl(documentPath, selected.id, revision)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <ExternalLink aria-hidden="true" />
-                  {ru.openMaterial}
-                </a>
-              )}
-            </div>
-          ) : (
-            <p className="empty-materials">{ru.noMaterials}</p>
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-function ContextSection({
-  document,
-  section,
-  panelId,
-  labelledBy,
-}: {
-  document: DocumentRepresentation;
-  section: ContextSectionId;
-  panelId: string;
-  labelledBy: string;
-}) {
-  if (section === "outgoing-links") {
-    return (
-      <section
-        id={panelId}
-        className="relationships"
-        role="tabpanel"
-        aria-labelledby={labelledBy}
-        tabIndex={0}
-      >
+      <h2>{ru.relatedDocuments}</h2>
+      <section className="relationships" aria-labelledby="links-heading">
         <h3 id="links-heading">{ru.outgoingLinks}</h3>
-        {document.outgoingLinks.length === 0 ? (
+        {representation.outgoingLinks.length === 0 ? (
           <p>{ru.noOutgoingLinks}</p>
         ) : (
           <ul aria-label={ru.outgoingLinks}>
-            {document.outgoingLinks.map((link, index) => (
+            {representation.outgoingLinks.map((link, index) => (
               <li key={`${link.target}-${index}`}>
                 {link.state === "resolved" && link.path ? (
                   <a href={documentRoute(link.path)}>{link.label}</a>
@@ -862,29 +479,19 @@ function ContextSection({
                   </span>
                 )}
                 <small>{ru.wikilinkState[link.state]}</small>
+                <p>{link.snippet}</p>
               </li>
             ))}
           </ul>
         )}
       </section>
-    );
-  }
-
-  if (section === "backlinks") {
-    return (
-      <section
-        id={panelId}
-        className="relationships"
-        role="tabpanel"
-        aria-labelledby={labelledBy}
-        tabIndex={0}
-      >
+      <section className="relationships" aria-labelledby="backlinks-heading">
         <h3 id="backlinks-heading">{ru.backlinks}</h3>
-        {document.backlinks.length === 0 ? (
+        {representation.backlinks.length === 0 ? (
           <p>{ru.noBacklinks}</p>
         ) : (
           <ul aria-label={ru.backlinks}>
-            {document.backlinks.map((backlink, index) => (
+            {representation.backlinks.map((backlink, index) => (
               <li key={`${backlink.path}-${index}`}>
                 <a href={documentRoute(backlink.path)}>{backlink.title}</a>
                 <p>{backlink.snippet}</p>
@@ -893,40 +500,48 @@ function ContextSection({
           </ul>
         )}
       </section>
-    );
-  }
+    </section>
+  );
+}
 
+function DocumentProperties({
+  representation,
+}: {
+  representation: DocumentRepresentation;
+}) {
   return (
-    <section
-      id={panelId}
-      className="properties"
-      role="tabpanel"
-      aria-labelledby={labelledBy}
-      tabIndex={0}
-    >
-      <h3 id="properties-heading">{ru.properties}</h3>
-      {document.properties.length > 0 ? (
+    <details className="document-properties">
+      <summary>{ru.details}</summary>
+      <div className="properties">
+        <h2>{ru.properties}</h2>
         <dl>
-          {document.properties.map((property) => (
+          <div>
+            <dt>{ru.documentPath}</dt>
+            <dd>/{representation.path}</dd>
+          </div>
+          {representation.properties.map((property) => (
             <div key={property.name}>
               <dt>{property.name}</dt>
               <dd>{property.value}</dd>
             </div>
           ))}
         </dl>
-      ) : (
-        <p>{ru.noProperties}</p>
-      )}
-    </section>
+      </div>
+    </details>
   );
 }
 
 function DocumentView({
   selection,
   openSearch,
+  openFiles,
 }: {
   selection: Extract<AtlasSelection, { kind: "document" }>;
   openSearch: (tag: string) => void;
+  openFiles: (
+    documentPath: string,
+    initialMaterial?: MaterialReference,
+  ) => void;
 }) {
   const documentPath = selection.path;
   const viewRef = useRef<HTMLElement>(null);
@@ -1035,6 +650,15 @@ function DocumentView({
     );
   }
 
+  const representation = documentQuery.data;
+  const files = [
+    ...representation.materials.sourceMaterials,
+    ...representation.materials.attachments,
+  ];
+  const sources = representation.materials.sourceMaterials;
+  const folder = parentFolder(representation.path);
+  const folders = folder ? folder.split("/") : [];
+
   return (
     <article
       ref={viewRef as RefObject<HTMLElement | null>}
@@ -1043,7 +667,17 @@ function DocumentView({
       onFocusCapture={rememberFocusedControl}
       onBlurCapture={forgetFocusedControl}
     >
-      <div className="document-kicker">/{documentQuery.data.path}</div>
+      <nav className="document-kicker" aria-label={ru.documentPath}>
+        <a href={folderRoute("")}>{ru.knowledgeBase}</a>
+        {folders.map((name, index) => (
+          <span key={folders.slice(0, index + 1).join("/")}>
+            <ChevronRight aria-hidden="true" />
+            <a href={folderRoute(folders.slice(0, index + 1).join("/"))}>
+              {name}
+            </a>
+          </span>
+        ))}
+      </nav>
       <h1>{documentQuery.data.title}</h1>
       {documentQuery.data.tags.length > 0 ? (
         <ul className="document-tags" aria-label={ru.tags}>
@@ -1056,6 +690,49 @@ function DocumentView({
           ))}
         </ul>
       ) : null}
+      <div className="document-actions">
+        {sources.length > 0 && (
+          <Button
+            onClick={() =>
+              openFiles(
+                representation.path,
+                sources.length === 1 ? sources[0] : undefined,
+              )
+            }
+          >
+            <BookOpenText aria-hidden="true" />
+            {sources.length === 1
+              ? ru.openOriginal
+              : `${ru.sources} · ${sources.length}`}
+          </Button>
+        )}
+        {files.length > 0 && (
+          <Button
+            className="secondary-button"
+            onClick={() =>
+              openFiles(
+                representation.path,
+                files.length === 1 ? files[0] : undefined,
+              )
+            }
+          >
+            <FileText aria-hidden="true" />
+            {ru.allFiles} · {files.length}
+          </Button>
+        )}
+        {representation.outgoingLinks.length + representation.backlinks.length >
+          0 && (
+          <a
+            className="relationship-shortcut"
+            href="#document-relationships"
+            aria-label={ru.showRelationships}
+          >
+            <Link2 aria-hidden="true" />
+            {ru.relatedDocuments}
+          </a>
+        )}
+        <DocumentProperties representation={representation} />
+      </div>
       {documentQuery.data.diagnostics.length > 0 ? (
         <section
           className="document-diagnostics"
@@ -1070,8 +747,37 @@ function DocumentView({
       ) : null}
       <div
         className="document-body"
-        dangerouslySetInnerHTML={{ __html: documentQuery.data.html }}
+        onClick={(event) => {
+          if (
+            event.button !== 0 ||
+            event.ctrlKey ||
+            event.metaKey ||
+            event.shiftKey ||
+            event.altKey
+          )
+            return;
+          const link = (event.target as HTMLElement).closest<HTMLAnchorElement>(
+            "a[href]",
+          );
+          if (!link) return;
+          const url = new URL(link.href, window.location.href);
+          if (
+            url.origin !== window.location.origin ||
+            url.pathname !== "/api/materials" ||
+            url.searchParams.get("document") !== representation.path
+          )
+            return;
+          const material = files.find(
+            (file) => file.id === url.searchParams.get("id"),
+          );
+          if (material) {
+            event.preventDefault();
+            openFiles(representation.path, material);
+          }
+        }}
+        dangerouslySetInnerHTML={{ __html: representation.html }}
       />
+      <DocumentContext representation={representation} />
     </article>
   );
 }
@@ -1111,6 +817,15 @@ function FolderView({ folderPath }: { folderPath: string }) {
       </div>
       <h1 id="folder-heading">{catalogQuery.data.name}</h1>
       <p>{ru.folderIntroduction}</p>
+      {catalogQuery.data.diagnostics.length > 0 && (
+        <section
+          className="catalog-diagnostics"
+          aria-label={ru.catalogDiagnostics}
+        >
+          <AlertTriangle aria-hidden="true" />
+          <p>{ru.catalogWarnings(catalogQuery.data.diagnostics.length)}</p>
+        </section>
+      )}
       <ul className="folder-entries" aria-label={ru.folderContents}>
         {catalogQuery.data.folders.map((folder) => (
           <li key={folder.path}>
@@ -1144,209 +859,148 @@ function FolderView({ folderPath }: { folderPath: string }) {
   );
 }
 
-function AtlasDrawer({
-  kind,
-  selection,
-  close,
-  openSearch,
-  returnFocusRef,
-}: {
-  kind: "navigation" | "context";
-  selection: AtlasSelection;
-  close: () => void;
-  openSearch: () => void;
-  returnFocusRef: RefObject<HTMLElement | null>;
-}) {
-  const drawerRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-  useModalFocus(drawerRef, closeButtonRef, returnFocusRef, close);
-
-  return (
-    <div className="drawer-layer">
-      <div className="drawer-backdrop" aria-hidden="true" onClick={close} />
-      <div
-        ref={drawerRef}
-        id={`${kind}-drawer`}
-        className={`drawer drawer-${kind}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label={
-          kind === "navigation" ? ru.navigationDialog : ru.contextDialog
-        }
-        tabIndex={-1}
-      >
-        {kind === "navigation" ? (
-          <Navigation
-            selection={selection}
-            close={close}
-            closeButtonRef={closeButtonRef}
-            openSearch={openSearch}
-          />
-        ) : (
-          <Context
-            selection={selection}
-            close={close}
-            closeButtonRef={closeButtonRef}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
 export function Atlas({
   selection = { kind: "document", path: "index.md", root: true },
 }: {
   selection?: AtlasSelection;
 }) {
-  const [drawers, setDrawers] = useState<DrawerState>({
-    navigation: false,
-    context: false,
-  });
-  const [navigationCollapsed, setNavigationCollapsed] = useState(false);
-  const [search, setSearch] = useState<{
-    open: boolean;
-    tag?: string;
-  }>({ open: false });
-  const navigationButtonRef = useRef<HTMLButtonElement>(null);
-  const contextButtonRef = useRef<HTMLButtonElement>(null);
-  const searchReturnFocusRef = useRef<HTMLElement>(null);
-  const closeDrawers = useCallback(
-    () => setDrawers({ navigation: false, context: false }),
-    [],
-  );
-  const closeSearch = useCallback(() => setSearch({ open: false }), []);
+  const [overlay, setOverlay] = useState<Overlay | null>(null);
+  const [criteria, setCriteria] = useState<SearchCriteria>(savedSearch);
+  const returnFocusRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const closeOverlay = useCallback(() => setOverlay(null), []);
+  const openOverlay = useCallback((next: Overlay) => {
+    if (document.activeElement instanceof HTMLElement)
+      returnFocusRef.current = document.activeElement;
+    setOverlay(next);
+  }, []);
   const openSearch = useCallback(
     (tag?: string) => {
-      const activeElement = document.activeElement;
-      searchReturnFocusRef.current =
-        drawers.navigation && navigationButtonRef.current
-          ? navigationButtonRef.current
-          : drawers.context && contextButtonRef.current
-            ? contextButtonRef.current
-            : activeElement instanceof HTMLElement
-              ? activeElement
-              : null;
-      closeDrawers();
-      setSearch(tag === undefined ? { open: true } : { open: true, tag });
+      // Closing navigation first restores a visible opener when search closes.
+      if (overlay?.kind !== "navigation") {
+        if (document.activeElement instanceof HTMLElement)
+          returnFocusRef.current = document.activeElement;
+      }
+      if (tag !== undefined) setCriteria({ query: "", tag });
+      setOverlay({ kind: "search" });
     },
-    [closeDrawers, drawers.context, drawers.navigation],
+    [overlay?.kind],
   );
+  const openFiles = useCallback(
+    (documentPath: string, initialMaterial?: MaterialReference) =>
+      openOverlay({ kind: "files", documentPath, initialMaterial }),
+    [openOverlay],
+  );
+
+  useEffect(() => {
+    closeOverlay();
+  }, [selection.kind, selection.path, closeOverlay]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("indexary:search", JSON.stringify(criteria));
+    } catch {
+      /* Browser storage is optional. */
+    }
+  }, [criteria]);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        openSearch();
+        // Do not replace a file modal while focus is inside its embedded viewer.
+        if (overlay?.kind !== "files") openSearch();
       }
     };
     document.addEventListener("keydown", handleShortcut);
     return () => document.removeEventListener("keydown", handleShortcut);
-  }, [openSearch]);
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") {
-      return;
-    }
-    const desktop = window.matchMedia("(min-width: 1101px)");
-    const handleDesktop = (event: MediaQueryListEvent) => {
-      if (event.matches) {
-        closeDrawers();
-      }
-    };
-    desktop.addEventListener("change", handleDesktop);
-    return () => desktop.removeEventListener("change", handleDesktop);
-  }, [closeDrawers]);
-
-  const drawerOpen = drawers.navigation || drawers.context;
-  const backgroundHidden = drawerOpen || search.open;
+  }, [openSearch, overlay?.kind]);
 
   return (
     <div className="app-shell">
       <div
         className="application-content"
-        aria-hidden={backgroundHidden ? "true" : undefined}
-        inert={backgroundHidden ? true : undefined}
+        aria-hidden={overlay ? "true" : undefined}
+        inert={overlay ? true : undefined}
       >
         <a className="skip-link" href="#document-content">
           {ru.skipToDocument}
         </a>
         <header className="topbar">
           <Button
-            ref={navigationButtonRef}
-            className="icon-button mobile-only"
+            className="icon-button"
             aria-label={ru.openNavigation}
-            aria-controls="navigation-drawer"
-            aria-expanded={drawers.navigation}
-            onClick={() => setDrawers({ navigation: true, context: false })}
+            aria-haspopup="dialog"
+            aria-expanded={overlay?.kind === "navigation"}
+            onClick={() => openOverlay({ kind: "navigation" })}
           >
             <Menu aria-hidden="true" />
           </Button>
           <a className="brand" href="/">
             <span className="brand-mark">{ru.productMark}</span>
-            <span>
-              <strong>{ru.productName}</strong>
-              <small>{ru.atlas}</small>
-            </span>
+            <strong>{ru.productName}</strong>
           </a>
-          <div className="topbar-spacer" />
-          <Button
-            ref={contextButtonRef}
-            className="icon-button mobile-only"
-            aria-label={ru.openContext}
-            aria-controls="context-drawer"
-            aria-expanded={drawers.context}
-            onClick={() => setDrawers({ navigation: false, context: true })}
+          <a className="home-link" href="/" aria-label={ru.home}>
+            <Home aria-hidden="true" />
+            <span>{ru.home}</span>
+          </a>
+          <button
+            className="global-search"
+            type="button"
+            aria-label={ru.searchPlaceholder}
+            aria-keyshortcuts="Control+K Meta+K"
+            onClick={() => openSearch()}
           >
-            <PanelRightOpen aria-hidden="true" />
-          </Button>
+            <Search aria-hidden="true" />
+            <span className="search-desktop-label">{ru.searchPlaceholder}</span>
+            <span className="search-compact-label">{ru.searchAction}</span>
+            <kbd>{ru.searchShortcut}</kbd>
+          </button>
         </header>
-
-        <div
-          className={`atlas-grid ${navigationCollapsed ? "navigation-collapsed" : ""}`}
-        >
-          <div className="desktop-panel">
-            <Navigation
+        <main id="document-content" className="document-column" tabIndex={-1}>
+          {selection.kind === "folder" ? (
+            <FolderView folderPath={selection.path} />
+          ) : (
+            <DocumentView
               selection={selection}
-              collapsed={navigationCollapsed}
-              toggleCollapsed={() =>
-                setNavigationCollapsed((collapsed) => !collapsed)
-              }
               openSearch={openSearch}
+              openFiles={openFiles}
             />
-          </div>
-          <main id="document-content" className="document-column" tabIndex={-1}>
-            {selection.kind === "folder" ? (
-              <FolderView folderPath={selection.path} />
-            ) : (
-              <DocumentView selection={selection} openSearch={openSearch} />
-            )}
-          </main>
-          <div className="desktop-panel">
-            <Context selection={selection} />
-          </div>
-        </div>
+          )}
+        </main>
       </div>
-
-      {drawerOpen ? (
-        <AtlasDrawer
-          kind={drawers.navigation ? "navigation" : "context"}
-          selection={selection}
-          close={closeDrawers}
-          openSearch={openSearch}
-          returnFocusRef={
-            drawers.navigation ? navigationButtonRef : contextButtonRef
-          }
-        />
-      ) : null}
-
-      {search.open ? (
+      {overlay?.kind === "navigation" && (
+        <Modal
+          className="navigation-dialog"
+          label={ru.navigationDialog}
+          initialFocusRef={closeButtonRef}
+          returnFocusRef={returnFocusRef}
+          close={closeOverlay}
+        >
+          <Navigation
+            selection={selection}
+            close={closeOverlay}
+            closeButtonRef={closeButtonRef}
+            openSearch={() => openSearch()}
+          />
+        </Modal>
+      )}
+      {overlay?.kind === "search" && (
         <SearchDialog
-          initialTag={search.tag}
-          close={closeSearch}
-          returnFocusRef={searchReturnFocusRef}
+          criteria={criteria}
+          setCriteria={setCriteria}
+          close={closeOverlay}
+          returnFocusRef={returnFocusRef}
         />
-      ) : null}
+      )}
+      {overlay?.kind === "files" && (
+        <MaterialViewer
+          documentPath={overlay.documentPath}
+          initialMaterial={overlay.initialMaterial}
+          close={closeOverlay}
+          returnFocusRef={returnFocusRef}
+        />
+      )}
     </div>
   );
 }
