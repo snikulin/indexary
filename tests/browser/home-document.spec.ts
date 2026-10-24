@@ -7,6 +7,12 @@ const fixtureRoot = path.resolve(
   "../../fixtures/knowledge-base",
 );
 
+// These assertions wait for the server to notice an external filesystem write:
+// debounce, a stat/reconcile pass, then an SSE round trip. Two seconds is a
+// tight budget for that chain under a loaded machine and made the suite flake
+// independently of any product change.
+const WATCH_PROPAGATION_TIMEOUT_MS = 10_000;
+
 test("opens the Home Document through the production origin", async ({
   page,
 }) => {
@@ -140,7 +146,7 @@ test("browses and directly opens a legal Linux filename containing backslash", a
     const link = page
       .getByRole("main")
       .getByRole("link", { name: "Обратная косая черта" });
-    await expect(link).toBeVisible({ timeout: 2_000 });
+    await expect(link).toBeVisible({ timeout: WATCH_PROPAGATION_TIMEOUT_MS });
     await link.click();
     await expect(page).toHaveURL(
       "/documents/%D0%9C%D0%B0%D1%80%D1%88%D1%80%D1%83%D1%82%5C2026.md",
@@ -394,7 +400,9 @@ test("reflects live external Document create, update, rename, and delete", async
     const createdLink = page
       .getByRole("main")
       .getByRole("link", { name: "Создано извне" });
-    await expect(createdLink).toBeVisible({ timeout: 2_000 });
+    await expect(createdLink).toBeVisible({
+      timeout: WATCH_PROPAGATION_TIMEOUT_MS,
+    });
     await createdLink.click();
     await expect(
       page.getByRole("heading", { name: "Создано извне", level: 1 }),
@@ -403,25 +411,27 @@ test("reflects live external Document create, update, rename, and delete", async
     await writeFile(createdPath, "# Обновлено извне\n\nВторая версия.\n");
     await expect(
       page.getByRole("heading", { name: "Обновлено извне", level: 1 }),
-    ).toBeVisible({ timeout: 2_000 });
+    ).toBeVisible({ timeout: WATCH_PROPAGATION_TIMEOUT_MS });
     await expect(page.locator(".live-status")).toHaveText("Документ обновлён.");
     await expect(page.getByRole("main")).toContainText("Вторая версия");
 
     await rename(createdPath, renamedPath);
     await expect(
       page.getByRole("heading", { name: "Документ недоступен", level: 1 }),
-    ).toBeVisible({ timeout: 2_000 });
+    ).toBeVisible({ timeout: WATCH_PROPAGATION_TIMEOUT_MS });
     await page.goto("/folders");
     const renamedLink = page
       .getByRole("main")
       .getByRole("link", { name: "Обновлено извне" });
-    await expect(renamedLink).toBeVisible({ timeout: 2_000 });
+    await expect(renamedLink).toBeVisible({
+      timeout: WATCH_PROPAGATION_TIMEOUT_MS,
+    });
     await renamedLink.click();
 
     await rm(renamedPath);
     await expect(
       page.getByRole("heading", { name: "Документ недоступен", level: 1 }),
-    ).toBeVisible({ timeout: 2_000 });
+    ).toBeVisible({ timeout: WATCH_PROPAGATION_TIMEOUT_MS });
   } finally {
     await Promise.all([
       rm(createdPath, { force: true }),
