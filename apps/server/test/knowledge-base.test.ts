@@ -11,11 +11,17 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import {
+  watch,
+  type FSWatcher,
+  type WatchListener,
+  type WatchOptionsWithStringEncoding,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   buildSafeFtsQuery,
@@ -26,6 +32,21 @@ import {
   verifyFts5Support,
 } from "../src/knowledge-base/index.js";
 import { captureTree } from "./helpers.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const filesystem = await importOriginal<typeof import("node:fs")>();
+  return { ...filesystem, watch: vi.fn(filesystem.watch) };
+});
+
+const filesystemWatch = vi.mocked<
+  (
+    root: string,
+    options: WatchOptionsWithStringEncoding & {
+      ignore?: (relativePath: string) => boolean;
+    },
+    listener: WatchListener<string>,
+  ) => FSWatcher
+>(watch);
 
 const fixtureRoot = path.resolve(
   import.meta.dirname,
@@ -78,9 +99,202 @@ afterEach(async () => {
       .splice(0)
       .map((directory) => rm(directory, { recursive: true })),
   );
+  filesystemWatch.mockReset();
+  vi.useRealTimers();
 });
 
 describe("Knowledge Base", () => {
+  test.each([false, true])(
+    "excludes hidden paths from recursive watching (retry: %s)",
+    async (retry) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), ".indexary-watch-"));
+      temporaryDirectories.push(root);
+      await writeFile(path.join(root, "index.md"), "# Главная\n");
+      if (retry) {
+        filesystemWatch.mockImplementationOnce(() => {
+          throw new Error("Initial watcher unavailable");
+        });
+      }
+      const knowledgeBase = await createTestKnowledgeBase(root, "watch-ignore");
+
+      await knowledgeBase.initialize();
+
+      expect(knowledgeBase.status()).toMatchObject({ state: "ready" });
+      const options = filesystemWatch.mock.calls.at(-1)?.[1];
+      expect(options).toMatchObject({
+        recursive: true,
+        ignore: expect.any(Function),
+      });
+      for (const hiddenPath of [
+        ".history-base",
+        ".history-base/restored/document.md",
+        "visible/.hidden/document.md",
+        "visible/.secret.md",
+      ]) {
+        expect(options?.ignore?.(hiddenPath)).toBe(true);
+      }
+      for (const visiblePath of [
+        "",
+        "visible",
+        "visible/document.MD",
+        "v1.0/a.md",
+      ]) {
+        expect(options?.ignore?.(visiblePath)).toBe(false);
+      }
+    },
+  );
+
+  test.each([
+    ".history-base/restored/document.md",
+    "visible/.hidden/document.md",
+    ".secret.md",
+    "unrelated.txt",
+  ])("does not schedule reconciliation for %s", async (filename) => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-watch-filter-"),
+    );
+    temporaryDirectories.push(root);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    const knowledgeBase = await createTestKnowledgeBase(root, "watch-filter");
+    await knowledgeBase.initialize();
+    const listener = filesystemWatch.mock.calls.at(-1)?.[2];
+    expect(listener).toBeTypeOf("function");
+    vi.useFakeTimers();
+
+    listener?.("change", filename);
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test("indexes and publishes visible Documents created before their first watcher event", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "indexary-watch-live-"));
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, "visible"));
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    const knowledgeBase = await createTestKnowledgeBase(root, "watch-live");
+    await knowledgeBase.initialize();
+    const listener = filesystemWatch.mock.calls.at(-1)?.[2];
+    // Deliver events explicitly, after the filesystem operation has completed.
+    filesystemWatch.mock.results.at(-1)?.value.close();
+    const changes: Array<{ type: string; path?: string }> = [];
+    knowledgeBase.subscribeChanges(undefined, (change) => changes.push(change));
+    const documentPath = "visible/Document.MD";
+    const absolutePath = path.join(root, documentPath);
+
+    await writeFile(absolutePath, "# Первая версия\n\nмаркер\n");
+    listener?.("rename", documentPath);
+
+    await expect
+      .poll(() => knowledgeBase.searchDocuments({ query: "маркер" }), {
+        timeout: 5_000,
+      })
+      .toMatchObject([{ path: documentPath, title: "Первая версия" }]);
+    expect(changes).toContainEqual(
+      expect.objectContaining({ type: "document-changed", path: documentPath }),
+    );
+
+    changes.length = 0;
+    await writeFile(absolutePath, "# Вторая версия\n\nновыймаркер\n");
+    listener?.("change", documentPath);
+
+    await expect
+      .poll(() => knowledgeBase.searchDocuments({ query: "новыймаркер" }), {
+        timeout: 5_000,
+      })
+      .toMatchObject([{ path: documentPath, title: "Вторая версия" }]);
+    expect(changes).toContainEqual(
+      expect.objectContaining({ type: "document-changed", path: documentPath }),
+    );
+
+    changes.length = 0;
+    await rm(absolutePath);
+    listener?.("rename", documentPath);
+
+    await expect
+      .poll(() => knowledgeBase.openDocument(documentPath), { timeout: 5_000 })
+      .toBeUndefined();
+    expect(changes).toContainEqual(
+      expect.objectContaining({ type: "document-removed", path: documentPath }),
+    );
+  });
+
+  test("reconciles visible folder creation and removal from directory events", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-watch-folder-"),
+    );
+    temporaryDirectories.push(root);
+    await writeFile(path.join(root, "index.md"), "# Главная\n");
+    const knowledgeBase = await createTestKnowledgeBase(root, "watch-folder");
+    await knowledgeBase.initialize();
+    const listener = filesystemWatch.mock.calls.at(-1)?.[2];
+    filesystemWatch.mock.results.at(-1)?.value.close();
+    const changes: Array<{ type: string; path?: string }> = [];
+    knowledgeBase.subscribeChanges(undefined, (change) => changes.push(change));
+
+    await mkdir(path.join(root, "visible"));
+    await writeFile(path.join(root, "visible", "Document.md"), "# Вложенный\n");
+    listener?.("rename", "visible");
+
+    await expect
+      .poll(() => knowledgeBase.openDocument("visible/Document.md"), {
+        timeout: 5_000,
+      })
+      .toMatchObject({ title: "Вложенный" });
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        type: "document-changed",
+        path: "visible/Document.md",
+      }),
+    );
+
+    await rm(path.join(root, "visible"), { recursive: true });
+    listener?.("rename", "visible");
+
+    await expect
+      .poll(() => knowledgeBase.openDocument("visible/Document.md"), {
+        timeout: 5_000,
+      })
+      .toBeUndefined();
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        type: "document-removed",
+        path: "visible/Document.md",
+      }),
+    );
+  });
+
+  test("keeps referenced material metadata live while filtering unrelated files", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-watch-material-"),
+    );
+    temporaryDirectories.push(root);
+    await writeFile(
+      path.join(root, "index.md"),
+      "---\noriginals: [source.bin]\n---\n# Главная\n",
+    );
+    await writeFile(path.join(root, "source.bin"), "one");
+    const knowledgeBase = await createTestKnowledgeBase(root, "watch-material");
+    await knowledgeBase.initialize();
+    const listener = filesystemWatch.mock.calls.at(-1)?.[2];
+    filesystemWatch.mock.results.at(-1)?.value.close();
+    const changes: Array<{ type: string; path?: string }> = [];
+    knowledgeBase.subscribeChanges(undefined, (change) => changes.push(change));
+
+    await writeFile(path.join(root, "source.bin"), "one-two-three");
+    listener?.("change", "source.bin");
+
+    await expect
+      .poll(
+        async () =>
+          (await knowledgeBase.openHomeDocument())?.materials.sourceMaterials,
+        { timeout: 5_000 },
+      )
+      .toMatchObject([{ status: "available", size: 13 }]);
+    expect(changes).toContainEqual(
+      expect.objectContaining({ type: "document-changed", path: "index.md" }),
+    );
+  });
+
   test("opens the root Home Document without changing a byte", async () => {
     const before = await captureTree(fixtureRoot);
     const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "indexary-cache-"));
