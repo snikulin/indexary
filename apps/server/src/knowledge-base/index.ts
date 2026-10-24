@@ -1430,12 +1430,32 @@ export function createKnowledgeBase(
   function observeFilesystemChange(filename: string | Buffer | null): void {
     if (filename !== null) {
       const observedPath = toCatalogPath(String(filename));
-      if (
-        observedPath !== "" &&
-        !hasHiddenSegment(observedPath) &&
-        observedPath.toLowerCase().endsWith(".md")
-      ) {
+      if (hasHiddenSegment(String(filename))) {
+        return;
+      }
+      if (observedPath.toLowerCase().endsWith(".md")) {
         observedDocumentPaths.add(observedPath);
+      } else if (
+        observedPath !== "" &&
+        database
+          ?.prepare(
+            `SELECT 1 FROM folders WHERE path = ?
+             UNION ALL
+             SELECT 1 FROM materials WHERE path = ? OR resolved_path = ?
+             LIMIT 1`,
+          )
+          .get(observedPath, observedPath, observedPath) === undefined
+      ) {
+        // A new directory may already contain Documents before its first event.
+        void stat(path.resolve(configuredRoot, String(filename))).then(
+          (metadata) => {
+            if (metadata.isDirectory()) {
+              queueReconcile();
+            }
+          },
+          () => undefined,
+        );
+        return;
       }
     }
     queueReconcile();
@@ -1646,11 +1666,13 @@ export function createKnowledgeBase(
   }
 
   async function load(): Promise<void> {
+    // Node 24 supports ignore, although the pinned @types/node omits it.
+    const watchOptions = { recursive: true, ignore: hasHiddenSegment };
     try {
       try {
         watcher ??= watch(
           path.resolve(configuredRoot),
-          { recursive: true },
+          watchOptions,
           (_eventType, filename) => observeFilesystemChange(filename),
         );
       } catch {
@@ -1684,10 +1706,8 @@ export function createKnowledgeBase(
       if (closed) {
         return;
       }
-      watcher ??= watch(
-        canonicalRoot,
-        { recursive: true },
-        (_eventType, filename) => observeFilesystemChange(filename),
+      watcher ??= watch(canonicalRoot, watchOptions, (_eventType, filename) =>
+        observeFilesystemChange(filename),
       );
       do {
         startupDirty = false;

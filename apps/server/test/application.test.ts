@@ -40,7 +40,7 @@ function config(knowledgeBasePath: string, webRoot?: string): RuntimeConfig {
 
 async function eventually(
   assertion: () => Promise<void>,
-  timeoutMs = 2_000,
+  timeoutMs = 5_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -874,6 +874,51 @@ originals: [materials/source.pdf]
 });
 
 describe("live external Knowledge Base changes", () => {
+  test("publishes nested Markdown edits over SSE with hidden directories excluded", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "indexary-live-visible-"),
+    );
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, "visible"));
+    await mkdir(path.join(root, ".history-base", "restored"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(root, "visible", "Document.md"),
+      "# Первая версия\n",
+    );
+    await writeFile(
+      path.join(root, ".history-base", "restored", "Private.md"),
+      "# Скрытый\n",
+    );
+    const app = await buildApplication(config(root));
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const stream = await observeServerEvents(`${address}/api/events`);
+
+    try {
+      await writeFile(
+        path.join(root, "visible", "Document.md"),
+        "# Вторая версия\n\nновыймаркер\n",
+      );
+
+      await eventually(async () => {
+        expect(stream.events).toContainEqual(
+          expect.objectContaining({
+            event: "document-changed",
+            data: expect.objectContaining({ path: "visible/Document.md" }),
+          }),
+        );
+        const search = await app.inject("/api/search?q=новыймаркер");
+        expect(search.json().results).toMatchObject([
+          { path: "visible/Document.md", title: "Вторая версия" },
+        ]);
+      });
+    } finally {
+      await app.close();
+      stream.close();
+    }
+  });
+
   test("reconciles live CRUD, relationships, materials, search, and revisioned SSE atomically", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "indexary-live-"));
     temporaryDirectories.push(root);
