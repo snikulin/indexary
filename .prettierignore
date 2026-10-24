@@ -4,3 +4,7 @@ docs/agents/triage-labels.md
 # Generated lock data is maintained by its owning tool.
 mise.lock
 pnpm-lock.yaml
+
+# Nested worktrees are local checkouts excluded via .git/info/exclude, which
+# Prettier does not read. Their generated state must not gate the quality gate.
+.worktrees/
